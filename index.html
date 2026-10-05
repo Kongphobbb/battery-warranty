@@ -1,0 +1,3125 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5" />
+<meta name="theme-color" content="#1f36eb" />
+<title>ระบบรับประกันแบตเตอรี่</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Sarabun:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+tailwind.config = {
+  theme: {
+    extend: {
+      colors: {
+        brand: {50:'#eef4ff',100:'#dbe7ff',200:'#bcd0ff',300:'#8eabff',400:'#597cff',500:'#3355ff',600:'#1f36eb',700:'#1727be',800:'#16269a',900:'#18267a'}
+      },
+      fontFamily: { sans: ['Inter','Sarabun','system-ui','sans-serif'] }
+    }
+  }
+};
+</script>
+
+<style>
+  html, body, #root { height: 100%; }
+  body { font-family: 'Inter','Sarabun',system-ui,sans-serif; background:#f8fafc; color:#1e293b; -webkit-font-smoothing:antialiased; }
+  ::-webkit-scrollbar { width:8px; height:8px; }
+  ::-webkit-scrollbar-thumb { background:#cbd5e1; border-radius:4px; }
+  ::-webkit-scrollbar-thumb:hover { background:#94a3b8; }
+  img { max-width:100%; height:auto; }
+  * { min-width: 0; }
+  .line-clamp-2 { display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  @media (max-width: 640px) {
+    .responsive-table thead { display: none; }
+    .responsive-table tbody tr { display: block; border: 1px solid #e2e8f0; border-radius: 12px; margin-bottom: 12px; background: #fff; padding: 12px; }
+    .responsive-table tbody td { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; padding: 6px 0; border: 0; }
+    .responsive-table tbody td::before { content: attr(data-label); font-weight: 600; color: #475569; flex-shrink: 0; }
+  }
+  .fade-in { animation: fadeIn .25s ease-out; }
+  @keyframes fadeIn { from { opacity:0; transform: translateY(4px);} to {opacity:1;transform:none;} }
+</style>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone@7.24.7/babel.min.js"></script>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-storage-compat.js"></script>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useMemo, useRef, useCallback, createContext, useContext } = React;
+
+/* =============================================================
+   FIREBASE
+   ============================================================= */
+const firebaseConfig = {
+  apiKey: "AIzaSyAVuNHbxF6i4XE0x8F3bOHfPCCv9n6aCBQ",
+  authDomain: "battery-warranty.firebaseapp.com",
+  projectId: "battery-warranty",
+  storageBucket: "battery-warranty.firebasestorage.app",
+  messagingSenderId: "861766441881",
+  appId: "1:861766441881:web:1ebfa0ac3c24ddb201d108",
+  measurementId: "G-3L1NX99V33"
+};
+if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
+const auth = firebase.auth();
+const db = firebase.firestore();
+const storage = firebase.storage();
+const FieldValue = firebase.firestore.FieldValue;
+
+/* =============================================================
+   UTILS
+   ============================================================= */
+const fmtTHB = (n) => new Intl.NumberFormat('th-TH',{style:'currency',currency:'THB',maximumFractionDigits:0}).format(Number(n)||0);
+const fmtNum = (n) => new Intl.NumberFormat('th-TH').format(Number(n)||0);
+const toDate = (d) => (d && d.toDate) ? d.toDate() : (d ? new Date(d) : null);
+const fmtDate = (d) => { const dt = toDate(d); return dt ? dt.toLocaleDateString('th-TH',{day:'2-digit',month:'2-digit',year:'numeric'}) : '-'; };
+const fmtDateTime = (d) => { const dt = toDate(d); return dt ? dt.toLocaleString('th-TH',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}) : '-'; };
+const toDateInput = (d) => { const dt = toDate(d)||new Date(); return `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}-${String(dt.getDate()).padStart(2,'0')}`; };
+const daysBetween = (a,b) => Math.ceil((b-a)/86400000);
+
+function warrantyStatus(endDate) {
+  const end = toDate(endDate); const now = new Date();
+  if (!end) return { status:'EXPIRED', daysLeft:0 };
+  if (now <= end) return { status:'ACTIVE', daysLeft: daysBetween(now, end) };
+  return { status:'EXPIRED', daysLeft: -daysBetween(end, now) };
+}
+function computeExpiry(startDate, months) {
+  const d = toDate(startDate) || new Date();
+  const x = new Date(d); x.setMonth(x.getMonth() + Number(months||12));
+  return x;
+}
+function downloadCSV(filename, rows) {
+  if (!rows || !rows.length) return;
+  const headers = Object.keys(rows[0]);
+  const esc = (v) => { if (v==null) return ''; const s=String(v).replace(/"/g,'""'); return /[",\n]/.test(s)?`"${s}"`:s; };
+  const csv = [headers.join(','), ...rows.map(r=>headers.map(h=>esc(r[h])).join(','))].join('\n');
+  const blob = new Blob(['\uFEFF'+csv],{type:'text/csv;charset=utf-8;'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href=url; a.download=filename; a.click();
+  URL.revokeObjectURL(url);
+}
+
+/* =============================================================
+   SERVICES: AUTH
+   ============================================================= */
+async function fetchUserRole(uid) {
+  if (!uid) return { role: null, exists: false, error: 'no-uid' };
+  try {
+    const s = await db.collection('users').doc(uid).get();
+    if (!s.exists) return { role: null, exists: false, error: 'no-document' };
+    return { role: s.data().role || null, exists: true, error: null };
+  } catch (e) {
+    console.error('[fetchUserRole]', e);
+    return { role: null, exists: false, error: e.code || 'unknown' };
+  }
+}
+
+/* =============================================================
+   SERVICES: AUDIT
+   ============================================================= */
+async function logAudit(admin, action, details) {
+  try {
+    await db.collection('auditLogs').add({
+      adminUid: admin?.uid||null, adminEmail: admin?.email||null,
+      action, details: details||{}, at: FieldValue.serverTimestamp()
+    });
+  } catch(e){ console.warn('audit fail', e); }
+}
+
+/* =============================================================
+   SERVICES: WARRANTY
+   ============================================================= */
+function buildPublicView(w) {
+  return { productName: w.productName, serialNumber: w.serialNumber, purchaseDate: w.purchaseDate,
+    startDate: w.startDate, endDate: w.endDate, months: w.months, customerName: w.customerName || '' };
+}
+async function lookupWarranty(serial) {
+  const clean = (serial||'').trim().toUpperCase();
+  if (!clean) return null;
+  const snap = await db.collection('publicWarranty').doc(clean).get();
+  return snap.exists ? { id:snap.id, ...snap.data() } : null;
+}
+
+/* ✅ เพิ่มฟังก์ชันนี้ */
+async function createWarranty(data, admin) {
+  const serial = (data.serialNumber||'').trim().toUpperCase();
+  if (!serial) throw new Error('กรุณากรอก Serial Number');
+
+  // ตรวจสอบว่า Serial นี้มีอยู่แล้วหรือไม่
+  const exist = await db.collection('publicWarranty').doc(serial).get();
+  if (exist.exists) throw new Error('Serial Number นี้มีอยู่ในระบบแล้ว');
+
+  // คำนวณวันหมดอายุ
+  const startDate = toDate(data.startDate) || new Date();
+  const months = Number(data.months) || 12;
+  const endDate = computeExpiry(startDate, months);
+
+  // สร้างข้อมูลหลักใน warranties
+  const ref = await db.collection('warranties').add({
+    serialNumber: serial,
+    productId: data.productId || '',
+    productName: data.productName || '',
+    purchaseDate: data.purchaseDate || '',
+    startDate: data.startDate || '',
+    endDate: endDate,
+    months: months,
+    customerName: data.customerName || '',
+    createdAt: FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp()
+  });
+
+  // สร้างข้อมูล Public lookup (ใช้ Serial เป็น ID)
+  await db.collection('publicWarranty').doc(serial).set({
+    productName: data.productName || '',
+    serialNumber: serial,
+    purchaseDate: data.purchaseDate || '',
+    startDate: data.startDate || '',
+    endDate: endDate,
+    months: months,
+    customerName: data.customerName || '',
+    createdAt: FieldValue.serverTimestamp()
+  });
+
+  await logAudit(admin, 'CREATE_WARRANTY', {
+    warrantyId: ref.id,
+    serialNumber: serial,
+    productName: data.productName
+  });
+
+  return ref.id;
+}
+
+async function listWarranties() {
+  const snap = await db.collection('warranties').get();
+  return snap.docs
+    .map(d=>({id:d.id,...d.data()}))
+    .sort((a,b) => {
+      const ta = a.createdAt?.toDate ? a.createdAt.toDate().getTime() : 0;
+      const tb = b.createdAt?.toDate ? b.createdAt.toDate().getTime() : 0;
+      return tb - ta;
+    });
+}
+async function deleteWarranty(id, before, admin) {
+  try {
+    // ลบ publicWarranty ที่ผูกกับ serial ด้วย
+    if (before?.serialNumber) {
+      await db.collection('publicWarranty').doc(before.serialNumber).delete();
+    }
+    await db.collection('warranties').doc(id).delete();
+    await logAudit(admin, 'DELETE_WARRANTY', {
+      warrantyId: id,
+      serialNumber: before?.serialNumber,
+      productName: before?.productName
+    });
+  } catch(e) {
+    throw new Error(e.message || 'ลบไม่สำเร็จ');
+  }
+}
+
+/* =============================================================
+   SERVICES: PRODUCTS
+   ============================================================= */
+async function listProducts() {
+  const snap = await db.collection('products').get();
+  return snap.docs
+    .map(d=>({id:d.id,...d.data()}))
+    .sort((a,b) => {
+      const ta = a.createdAt?.toDate ? a.createdAt.toDate().getTime() : 0;
+      const tb = b.createdAt?.toDate ? b.createdAt.toDate().getTime() : 0;
+      return tb - ta;
+    });
+}
+async function listActiveProducts() {
+  const snap = await db.collection('products').get();
+  return snap.docs
+    .map(d=>({id:d.id,...d.data()}))
+    .filter(p => p.active !== false)
+    .sort((a,b) => {
+      const ta = a.createdAt?.toDate ? a.createdAt.toDate().getTime() : 0;
+      const tb = b.createdAt?.toDate ? b.createdAt.toDate().getTime() : 0;
+      return tb - ta;
+    });
+}
+async function getProduct(id) {
+  const s = await db.collection('products').doc(id).get();
+  return s.exists ? {id:s.id,...s.data()} : null;
+}
+async function createProduct(data, admin) {
+  const ref = await db.collection('products').add({ ...data, active:true,
+    createdAt: FieldValue.serverTimestamp(), updatedAt: FieldValue.serverTimestamp() });
+  await logAudit(admin,'CREATE_PRODUCT',{productId:ref.id, name:data.name});
+  return ref.id;
+}
+async function updateProduct(id, before, patch, admin) {
+  await db.collection('products').doc(id).update({...patch, updatedAt: FieldValue.serverTimestamp()});
+  await logAudit(admin,'UPDATE_PRODUCT',{productId:id, before, after:patch});
+}
+async function softDeleteProduct(id, before, admin) {
+  await db.collection('products').doc(id).update({active:false, updatedAt: FieldValue.serverTimestamp()});
+  await logAudit(admin,'SOFT_DELETE_PRODUCT',{productId:id, name:before?.name});
+}
+async function changePrice(id, before, newPrice, admin) {
+  await db.collection('products').doc(id).update({price:newPrice, updatedAt: FieldValue.serverTimestamp()});
+  await db.collection('priceHistory').add({ productId:id, productName:before.name,
+    oldPrice:before.price, newPrice, editedBy: admin?.email||admin?.uid, at: FieldValue.serverTimestamp() });
+  await logAudit(admin,'CHANGE_PRICE',{productId:id, oldPrice:before.price, newPrice});
+}
+
+/* =============================================================
+   SERVICES: STOCK
+   ============================================================= */
+async function adjustStock(productId, delta, reason, admin) {
+  if (!Number.isFinite(delta) || delta===0) throw new Error('จำนวนไม่ถูกต้อง');
+  const ref = db.collection('products').doc(productId);
+  const result = await db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    if (!snap.exists) throw new Error('ไม่พบสินค้า');
+    const cur = snap.data().stock||0;
+    const next = cur + delta;
+    if (next < 0) throw new Error('Stock ไม่พอสำหรับการลด');
+    tx.update(ref, {stock:next, updatedAt: FieldValue.serverTimestamp()});
+    return {before:cur, after:next};
+  });
+  await db.collection('stockMovements').add({ productId, delta, reason,
+    before: result.before, after: result.after, by: admin?.email||admin?.uid, at: FieldValue.serverTimestamp() });
+  await logAudit(admin, delta>0?'STOCK_IN':'STOCK_OUT', {productId, delta, reason, before:result.before, after:result.after});
+  return result;
+}
+
+/* =============================================================
+   SERVICES: CLAIMS
+   ============================================================= */
+const CLAIM_STATUSES = ['PENDING','INSPECTING','APPROVED','REJECTED','REPLACED','COMPLETED'];
+const STATUS_LABELS = { PENDING:'รอตรวจสอบ', INSPECTING:'กำลังตรวจสอบ', APPROVED:'อนุมัติ',
+  REJECTED:'ไม่อนุมัติ', REPLACED:'เปลี่ยนสินค้า', COMPLETED:'เสร็จสิ้น' };
+async function listClaims() {
+  const snap = await db.collection('claims').orderBy('createdAt','desc').get();
+  return snap.docs.map(d=>({id:d.id,...d.data()}));
+}
+async function updateClaimStatus(id, status, admin, extra={}) {
+  await db.collection('claims').doc(id).update({ status, ...extra,
+    updatedAt: FieldValue.serverTimestamp(), handledBy: admin?.email||admin?.uid });
+  await logAudit(admin,'UPDATE_CLAIM_STATUS',{claimId:id, status, ...extra});
+}
+
+/* =============================================================
+   SERVICES: SALES
+   ============================================================= */
+async function listSales() {
+  const snap = await db.collection('sales').orderBy('createdAt','desc').get();
+  return snap.docs.map(d=>({id:d.id,...d.data()}));
+}
+
+/* =============================================================
+   SERVICES: AUDIT LOG
+   ============================================================= */
+async function listAuditLogs(max=300) {
+  const snap = await db.collection('auditLogs').orderBy('at','desc').limit(max).get();
+  return snap.docs.map(d=>({id:d.id,...d.data()}));
+}
+
+/* =============================================================
+   SERVICES: STORAGE (Base64 → Firestore)
+   ============================================================= */
+async function optimizeImageToBase64(file, maxSize=600, quality=0.55, targetKB=150) {
+  if (!file.type.startsWith('image/')) throw new Error('ไฟล์ต้องเป็นรูปภาพ');
+  if (file.size > 5*1024*1024) throw new Error('ไฟล์ใหญ่เกิน 5MB');
+
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onload = () => {
+        let currentMax = maxSize;
+        let currentQ = quality;
+        let dataUrl = '';
+        let sizeKB = 0;
+
+        // ลดขนาดซ้ำๆ จนได้ตาม target
+        for (let i = 0; i < 6; i++) {
+          const canvas = document.createElement('canvas');
+          let { width, height } = img;
+          const scale = Math.min(1, currentMax / Math.max(width, height));
+          width = Math.round(width * scale);
+          height = Math.round(height * scale);
+          canvas.width = width;
+          canvas.height = height;
+          canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+          dataUrl = canvas.toDataURL('image/jpeg', currentQ);
+
+          // ประมาณขนาดเป็น KB
+          const base64Len = dataUrl.length - 'data:image/jpeg;base64,'.length;
+          sizeKB = (base64Len * 0.75) / 1024;
+
+          if (sizeKB <= targetKB) break;
+
+          // ลดลงเรื่อยๆ
+          currentMax = Math.round(currentMax * 0.75);
+          currentQ = Math.max(0.3, currentQ - 0.1);
+        }
+
+        resolve({ dataUrl, sizeKB: Math.round(sizeKB) });
+      };
+      img.onerror = () => reject(new Error('ไม่สามารถโหลดรูปได้'));
+      img.src = e.target.result;
+    };
+    reader.onerror = () => reject(new Error('อ่านไฟล์ไม่สำเร็จ'));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function uploadImage(folder, id, file, name='image') {
+  const { dataUrl, sizeKB } = await optimizeImageToBase64(file);
+  // ✅ เก็บเป็น Base64 โดยไม่มี path (เพราะไม่มี Storage)
+  return { url: dataUrl, path: null, sizeKB };
+}
+
+async function uploadProductImage(productId, file, index=0) {
+  return uploadImage('products', productId, file, `image-${index}`);
+}
+
+// ✅ ไม่ต้องลบไฟล์เพราะเก็บใน Firestore แล้ว
+async function deleteFile(path) {
+  if (!path) return;
+  return;
+}
+/* =============================================================
+   SERVICES: CATEGORIES
+   ============================================================= */
+async function listCategories() {
+  const snap = await db.collection('categories').get();
+  return snap.docs
+    .map(d=>({id:d.id,...d.data()}))
+    .sort((a,b) => (a.order||0) - (b.order||0));
+}
+async function listActiveCategories() {
+  const snap = await db.collection('categories').get();
+  return snap.docs
+    .map(d=>({id:d.id,...d.data()}))
+    .filter(c => c.active !== false)
+    .sort((a,b) => (a.order||0) - (b.order||0));
+}
+async function createCategory(data, admin) {
+  const ref = await db.collection('categories').add({
+    ...data, active: data.active !== false,
+    order: Number(data.order) || 0,
+    createdAt: FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp()
+  });
+  await logAudit(admin, 'CREATE_CATEGORY', { categoryId: ref.id, name: data.name });
+  return ref.id;
+}
+async function updateCategory(id, before, patch, admin) {
+  await db.collection('categories').doc(id).update({ ...patch, updatedAt: FieldValue.serverTimestamp() });
+  await logAudit(admin, 'UPDATE_CATEGORY', { categoryId: id, before, after: patch });
+}
+async function deleteCategory(id, before, admin) {
+  await db.collection('categories').doc(id).delete();
+  await logAudit(admin, 'DELETE_CATEGORY', { categoryId: id, name: before?.name });
+}
+
+/* =============================================================
+   SERVICES: CONTACTS
+   ============================================================= */
+const CONTACT_TYPES = [
+  { value: 'line',     label: 'LINE',     icon: '💬', placeholder: '@yourline' },
+  { value: 'facebook', label: 'Facebook', icon: '📘', placeholder: 'Page name' },
+  { value: 'phone',    label: 'โทรศัพท์', icon: '📞', placeholder: '08x-xxx-xxxx' },
+  { value: 'email',    label: 'อีเมล',    icon: '✉️', placeholder: 'you@email.com' },
+  { value: 'shopee',   label: 'Shopee',   icon: '🛍️', placeholder: 'Shop URL' },
+  { value: 'lazada',   label: 'Lazada',   icon: '🛒', placeholder: 'Shop URL' },
+  { value: 'tiktok',   label: 'TikTok',   icon: '🎵', placeholder: '@yourname' },
+  { value: 'website',  label: 'เว็บไซต์',  icon: '🌐', placeholder: 'https://...' },
+  { value: 'other',    label: 'อื่น ๆ',    icon: '🔗', placeholder: '' }
+];
+
+async function listContacts() {
+  const snap = await db.collection('contacts').orderBy('order','asc').get();
+  return snap.docs.map(d=>({id:d.id,...d.data()}));
+}
+async function listActiveContacts() {
+  const snap = await db.collection('contacts').orderBy('order','asc').get();
+  return snap.docs.map(d=>({id:d.id,...d.data()})).filter(c => c.active !== false);
+}
+async function createContact(data, admin) {
+  const ref = await db.collection('contacts').add({
+    ...data, active: data.active !== false,
+    order: Number(data.order) || 0,
+    createdAt: FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp()
+  });
+  await logAudit(admin, 'CREATE_CONTACT', { contactId: ref.id, label: data.label });
+  return ref.id;
+}
+async function updateContact(id, before, patch, admin) {
+  await db.collection('contacts').doc(id).update({ ...patch, updatedAt: FieldValue.serverTimestamp() });
+  await logAudit(admin, 'UPDATE_CONTACT', { contactId: id, before, after: patch });
+}
+async function deleteContact(id, before, admin) {
+  await db.collection('contacts').doc(id).delete();
+  await logAudit(admin, 'DELETE_CONTACT', { contactId: id, label: before?.label });
+}
+
+/* =============================================================
+   CONTEXTS
+   ============================================================= */
+const AuthContext = createContext(null);
+const ToastContext = createContext(null);
+
+function AuthProvider({children}) {
+  const [user, setUser] = useState(null);
+  const [role, setRole] = useState(null);
+  const [roleError, setRoleError] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const unsub = auth.onAuthStateChanged(async (u) => {
+      if (u) {
+        setLoading(true);
+        let result = { role: null, exists: false, error: null };
+        for (let i = 0; i < 3; i++) {
+          result = await fetchUserRole(u.uid);
+          if (result.exists) break;
+          if (i < 2) await new Promise(x => setTimeout(x, 400));
+        }
+        setRole(result.role); setRoleError(result.error); setUser(u); setLoading(false);
+      } else {
+        setUser(null); setRole(null); setRoleError(null); setLoading(false);
+      }
+    });
+    return () => unsub();
+  }, []);
+
+  const value = { user, role, roleError, isAdmin: role === 'admin', loading, logout: () => auth.signOut() };
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+}
+const useAuth = () => useContext(AuthContext);
+
+function ToastProvider({children}) {
+  const [items, setItems] = useState([]);
+  const push = useCallback((message, type='info', timeout=3200) => {
+    const id = Math.random().toString(36).slice(2);
+    setItems(prev=>[...prev,{id,message,type}]);
+    setTimeout(()=>setItems(prev=>prev.filter(i=>i.id!==id)), timeout);
+  },[]);
+  const api = { success:(m)=>push(m,'success'), error:(m)=>push(m,'error'), info:(m)=>push(m,'info') };
+  return (
+    <ToastContext.Provider value={api}>
+      {children}
+      <div className="fixed z-[100] top-4 right-4 left-4 sm:left-auto sm:w-96 flex flex-col gap-2">
+        {items.map(i=>(
+          <div key={i.id} className={`fade-in rounded-xl px-4 py-3 shadow-lg text-white text-sm
+            ${i.type==='success'?'bg-emerald-600':i.type==='error'?'bg-rose-600':'bg-slate-800'}`}>
+            {i.message}
+          </div>
+        ))}
+      </div>
+    </ToastContext.Provider>
+  );
+}
+const useToast = () => useContext(ToastContext);
+
+/* =============================================================
+   UI COMPONENTS
+   ============================================================= */
+function Button({children, variant='primary', size='md', className='', ...rest}) {
+  const base = 'inline-flex items-center justify-center gap-2 font-medium rounded-lg transition disabled:opacity-50 disabled:cursor-not-allowed';
+  const variants = {
+    primary: 'bg-brand-600 hover:bg-brand-700 text-white shadow-sm',
+    secondary: 'bg-slate-100 hover:bg-slate-200 text-slate-700',
+    danger: 'bg-rose-600 hover:bg-rose-700 text-white',
+    ghost: 'hover:bg-slate-100 text-slate-700',
+    outline: 'border border-slate-300 bg-white hover:bg-slate-50 text-slate-700',
+    success: 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm'
+  };
+  const sizes = { sm:'px-3 py-1.5 text-sm', md:'px-4 py-2.5 text-sm', lg:'px-5 py-3 text-base' };
+  return <button className={`${base} ${variants[variant]} ${sizes[size]} ${className}`} {...rest}>{children}</button>;
+}
+
+function Input({label, error, hint, className='', as='input', children, ...rest}) {
+  const base = 'w-full rounded-lg border px-3.5 py-2.5 text-sm outline-none transition bg-white ' +
+    (error ? 'border-rose-400 focus:border-rose-500 focus:ring-2 focus:ring-rose-100'
+           : 'border-slate-300 focus:border-brand-500 focus:ring-2 focus:ring-brand-100');
+  return (
+    <label className="block">
+      {label && <span className="block text-sm font-medium text-slate-700 mb-1.5">{label}</span>}
+      {as==='textarea' ? <textarea className={`${base} ${className}`} {...rest}/>
+        : as==='select' ? <select className={`${base} ${className}`} {...rest}>{children}</select>
+        : <input className={`${base} ${className}`} {...rest}/>}
+      {error && <span className="block mt-1 text-xs text-rose-600">{error}</span>}
+      {hint && !error && <span className="block mt-1 text-xs text-slate-500">{hint}</span>}
+    </label>
+  );
+}
+
+function Card({title, action, children, className=''}) {
+  return (
+    <div className={`bg-white rounded-2xl border border-slate-200 shadow-sm ${className}`}>
+      {(title||action) && (
+        <div className="flex items-center justify-between gap-3 px-5 py-4 border-b border-slate-100">
+          <h3 className="font-semibold text-slate-800">{title}</h3>{action}
+        </div>
+      )}
+      <div className="p-5">{children}</div>
+    </div>
+  );
+}
+
+const badgeMap = {
+  green:'bg-emerald-50 text-emerald-700 border-emerald-200',
+  red:'bg-rose-50 text-rose-700 border-rose-200',
+  amber:'bg-amber-50 text-amber-700 border-amber-200',
+  blue:'bg-blue-50 text-blue-700 border-blue-200',
+  slate:'bg-slate-100 text-slate-700 border-slate-200',
+  purple:'bg-purple-50 text-purple-700 border-purple-200'
+};
+function Badge({color='slate', children, className=''}) {
+  return <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium border ${badgeMap[color]} ${className}`}>{children}</span>;
+}
+
+function Spinner({label='กำลังโหลดข้อมูล...'}) {
+  return (
+    <div className="flex flex-col items-center justify-center gap-3 py-10 text-slate-500">
+      <div className="w-8 h-8 rounded-full border-2 border-slate-200 border-t-brand-600 animate-spin" />
+      <span className="text-sm">{label}</span>
+    </div>
+  );
+}
+
+function EmptyState({title='ไม่พบข้อมูล', description, icon='📦'}) {
+  return (
+    <div className="flex flex-col items-center justify-center py-12 text-center">
+      <div className="text-4xl mb-3">{icon}</div>
+      <h4 className="font-medium text-slate-700">{title}</h4>
+      {description && <p className="text-sm text-slate-500 mt-1 max-w-sm">{description}</p>}
+    </div>
+  );
+}
+
+function Modal({open, onClose, title, children, footer, size='md'}) {
+  if (!open) return null;
+  const w = {sm:'max-w-sm', md:'max-w-lg', lg:'max-w-3xl', xl:'max-w-5xl'}[size];
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50" onClick={onClose}>
+      <div className={`w-full ${w} bg-white rounded-2xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col`} onClick={e=>e.stopPropagation()}>
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
+          <h3 className="font-semibold text-slate-800">{title}</h3>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 text-xl leading-none">×</button>
+        </div>
+        <div className="p-5 overflow-y-auto flex-1">{children}</div>
+        {footer && <div className="px-5 py-4 border-t border-slate-100 bg-slate-50">{footer}</div>}
+      </div>
+    </div>
+  );
+}
+
+function Confirm({open, onClose, onConfirm, title='ยืนยัน', message, confirmText='ยืนยัน', danger}) {
+  return (
+    <Modal open={open} onClose={onClose} title={title} size="sm"
+      footer={<div className="flex justify-end gap-2">
+        <Button variant="secondary" onClick={onClose}>ยกเลิก</Button>
+        <Button variant={danger?'danger':'primary'} onClick={onConfirm}>{confirmText}</Button>
+      </div>}>
+      <p className="text-slate-600 whitespace-pre-line">{message}</p>
+    </Modal>
+  );
+}
+
+/* ✅ FIX: ใช้ new window.Chart เพื่อไม่ให้ชนกับชื่อ component ChartBox */
+function ChartBox({type='line', data, options={}, height=260}) {
+  const canvasRef = useRef(null);
+  const chartRef = useRef(null);
+  useEffect(()=>{
+    if (!canvasRef.current) return;
+    if (chartRef.current) chartRef.current.destroy();
+    chartRef.current = new window.Chart(canvasRef.current.getContext('2d'), {type, data, options:{
+      responsive:true, maintainAspectRatio:false,
+      plugins:{legend:{position:'bottom',labels:{font:{family:'Sarabun'}}}},
+      ...options
+    }});
+    return () => { if (chartRef.current) chartRef.current.destroy(); };
+  }, [type, JSON.stringify(data), JSON.stringify(options)]);
+  return <div style={{height}}><canvas ref={canvasRef}/></div>;
+}
+
+/* ---------- Image Uploader (single) ---------- */
+function SingleImageUploader({value, onChange, folder='misc', id='temp', name='image', aspect='aspect-video', label='อัปโหลดรูป'}) {
+  const toast = useToast();
+  const inputRef = useRef(null);
+  const [drag, setDrag] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const handleFile = async (file) => {
+    if (!file) return;
+    if (file.size > 8*1024*1024) { toast.error('ไฟล์ใหญ่เกิน 8MB'); return; }
+    setBusy(true);
+    try {
+      const { url, path } = await uploadImage(folder, id, file, name);
+      if (value?.path) await deleteFile(value.path);
+      onChange({ url, path });
+      toast.success('อัปโหลดสำเร็จ');
+    } catch(e) { toast.error(e.message||'อัปโหลดไม่สำเร็จ'); }
+    finally { setBusy(false); if (inputRef.current) inputRef.current.value=''; }
+  };
+
+  const remove = async () => {
+    if (value?.path) await deleteFile(value.path);
+    onChange(null);
+  };
+
+  return (
+    <div className="space-y-3">
+      <div
+        onDragOver={e=>{e.preventDefault();setDrag(true);}}
+        onDragLeave={()=>setDrag(false)}
+        onDrop={e=>{e.preventDefault();setDrag(false);handleFile(e.dataTransfer.files?.[0]);}}
+        onClick={()=>inputRef.current?.click()}
+        className={`border-2 border-dashed rounded-2xl overflow-hidden cursor-pointer transition
+          ${drag?'border-brand-500 bg-brand-50':'border-slate-300 hover:border-brand-400 hover:bg-slate-50'}`}>
+        {value?.url ? (
+          <img src={value.url} alt="" className={`w-full ${aspect} object-cover`} />
+        ) : (
+          <div className={`${aspect} grid place-items-center text-center p-4`}>
+            <div>
+              <div className="text-3xl mb-2">📷</div>
+              <div className="font-medium text-slate-700">{label}</div>
+              <div className="text-xs text-slate-500 mt-1">คลิกหรือลากรูปมาวาง</div>
+              <div className="text-xs text-slate-400 mt-1">JPG, PNG, WEBP (ระบบจะบีบให้อัตโนมัติ ~150KB)</div>
+            </div>
+          </div>
+        )}
+        <input ref={inputRef} type="file" accept="image/jpeg,image/png,image/webp" hidden
+               onChange={e=>handleFile(e.target.files?.[0])}/>
+      </div>
+      {busy && <div className="text-sm text-brand-600">กำลังอัปโหลด...</div>}
+      {value?.url && (
+        <div className="flex gap-2">
+          <Button size="sm" variant="outline" onClick={()=>inputRef.current?.click()}>เปลี่ยนรูป</Button>
+          <Button size="sm" variant="danger" onClick={remove}>ลบรูป</Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ---------- Image Uploader (multi) ---------- */
+function ImageUploader({images=[], onChange, productId}) {
+  const toast = useToast();
+  const inputRef = useRef(null);
+  const [drag, setDrag] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState(0);
+
+  const handleFiles = async (files) => {
+    const list = Array.from(files||[]);
+    if (!list.length) return;
+    setBusy(true);
+    setProgress(0);
+    try {
+      let done = 0;
+      const results = await Promise.all(
+        list.map(async (f, i) => {
+          if (f.size > 8*1024*1024) { toast.error(`${f.name} ใหญ่เกิน 8MB`); return null; }
+          try {
+            const {url, path} = await uploadProductImage(productId||'temp', f, images.length+i);
+            done++;
+            setProgress(Math.round((done/list.length)*100));
+            return {url, path, isMain: images.length===0 && i===0};
+          } catch(err) {
+            toast.error(`${f.name}: ${err.message||'อัปโหลดล้มเหลว'}`);
+            return null;
+          }
+        })
+      );
+      const uploaded = results.filter(Boolean);
+const next = [...images, ...uploaded];
+
+// ✅ ประมาณขนาดทั้งหมด (Base64)
+const totalBytes = next.reduce((sum, img) => {
+  if (!img?.url?.startsWith('data:')) return sum;
+  const base64 = img.url.split(',')[1] || '';
+  return sum + Math.round(base64.length * 0.75);
+}, 0);
+
+if (totalBytes > 850 * 1024) {
+  toast.error('รูปทั้งหมดใหญ่เกินไปสำหรับ Firestore (1MB) กรุณาลบรูปเก่าออกก่อน');
+  return;
+}
+
+onChange(next);
+toast.success(`อัปโหลด ${uploaded.length} รูปสำเร็จ`);      onChange([...images, ...uploaded]);
+      const totalKB = uploaded.reduce((s, x) => s + (x.sizeKB || 0), 0);
+toast.success(`อัปโหลด ${uploaded.length} รูปสำเร็จ (${totalKB} KB)`);
+    } catch(e) { toast.error(e.message||'อัปโหลดไม่สำเร็จ'); }
+    finally { setBusy(false); setProgress(0); if (inputRef.current) inputRef.current.value=''; }
+  };
+
+  const onDrop = (e) => { e.preventDefault(); setDrag(false); handleFiles(e.dataTransfer.files); };
+  const removeAt = async (i) => {
+    const img = images[i];
+    if (img.path) await deleteFile(img.path);
+    const next = images.filter((_,idx)=>idx!==i);
+    if (next.length && !next.some(x=>x.isMain)) next[0]={...next[0],isMain:true};
+    onChange(next);
+  };
+  const setMain = (i) => onChange(images.map((im,idx)=>({...im,isMain:idx===i})));
+
+  return (
+    <div className="space-y-3">
+      <div onDragOver={e=>{e.preventDefault();setDrag(true);}}
+           onDragLeave={()=>setDrag(false)} onDrop={onDrop}
+           onClick={()=>inputRef.current?.click()}
+           className={`border-2 border-dashed rounded-2xl p-6 sm:p-8 text-center cursor-pointer transition
+             ${drag?'border-brand-500 bg-brand-50':'border-slate-300 hover:border-brand-400 hover:bg-slate-50'}`}>
+        <div className="text-3xl mb-2">📷</div>
+        <p className="font-medium text-slate-700">เพิ่มรูปสินค้า</p>
+        <p className="text-sm text-slate-500 mt-1">คลิกเพื่อเลือกรูปภาพ หรือลากรูปมาวาง (เลือกหลายรูปพร้อมกันได้)</p>
+        <p className="text-xs text-slate-400 mt-2">JPG, PNG, WEBP (บีบอัตโนมัติ · รวมไม่เกิน 1MB)</p>
+        <input ref={inputRef} type="file" accept="image/jpeg,image/png,image/webp" multiple hidden
+               onChange={e=>handleFiles(e.target.files)}/>
+      </div>
+      {busy && (
+        <div className="space-y-1">
+          <div className="flex items-center justify-between text-sm text-brand-600">
+            <span>กำลังอัปโหลด...</span>
+            <span className="font-semibold">{progress}%</span>
+          </div>
+          <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
+            <div className="h-full bg-brand-500 transition-all duration-200" style={{width:`${progress}%`}}/>
+          </div>
+        </div>
+      )}
+      {images.length>0 && (
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+          {images.map((img,i)=>(
+            <div key={img.url} className="relative group rounded-xl overflow-hidden border border-slate-200 bg-white">
+              <img src={img.url} alt="" className="aspect-square object-cover w-full"/>
+              {img.isMain && <span className="absolute top-2 left-2 bg-brand-600 text-white text-xs px-2 py-0.5 rounded-full">รูปหลัก</span>}
+              <div className="absolute inset-x-0 bottom-0 p-2 flex gap-1 bg-gradient-to-t from-black/60 to-transparent opacity-0 group-hover:opacity-100 transition">
+                {!img.isMain && <Button size="sm" variant="secondary" onClick={e=>{e.stopPropagation();setMain(i);}}>ตั้งหลัก</Button>}
+                <Button size="sm" variant="danger" onClick={e=>{e.stopPropagation();removeAt(i);}}>ลบ</Button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* =============================================================
+   PUBLIC LAYOUT
+   ============================================================= */
+function PublicLayout({children}) {
+  const hash = window.location.hash || '#/';
+  const navLink = (href, label) => {
+    const active = hash === href;
+    return (
+      <a href={href}
+         className={`text-sm font-medium transition hidden md:inline-flex items-center gap-1.5 px-3 py-2 rounded-lg
+           ${active ? 'bg-white/20 text-white' : 'text-white/90 hover:bg-white/10 hover:text-white'}`}>
+        {label}
+      </a>
+    );
+  };
+  return (
+    <div className="min-h-screen flex flex-col bg-slate-50">
+      {/* Header — Nav สีน้ำเงิน */}
+      <header className="bg-gradient-to-r from-blue-600 to-blue-700 sticky top-0 z-30 shadow-md">
+        <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between gap-4">
+          <a href="#/" className="flex items-center gap-2.5 shrink-0">
+            <div className="w-10 h-10 rounded-xl bg-white/20 backdrop-blur grid place-items-center text-white font-bold text-lg">B</div>
+            <div className="leading-tight hidden sm:block">
+              <div className="font-bold text-white">Battery Warranty</div>
+              <div className="text-[10px] text-white/70">ระบบรับประกันแบตเตอรี่</div>
+            </div>
+          </a>
+
+          <nav className="flex items-center gap-1">
+            {navLink('#/', 'หน้าแรก')}
+            {navLink('#/products', 'สินค้าทั้งหมด')}
+            {navLink('#/check', 'ตรวจสอบประกัน')}
+            {navLink('#/contact', 'ติดต่อเรา')}
+          </nav>
+
+          <div className="flex items-center gap-2">
+            <a href="#/admin/login"
+               className="text-sm font-medium text-white bg-white/15 hover:bg-white/25 px-4 py-2 rounded-lg transition">
+              ⚡
+            </a>
+          </div>
+        </div>
+
+        {/* Mobile Nav */}
+        <div className="md:hidden border-t border-white/10 px-4 py-2 flex gap-2 overflow-x-auto">
+          <a href="#/" className="text-xs text-white/90 px-3 py-1.5 rounded-lg bg-white/10 whitespace-nowrap">หน้าแรก</a>
+          <a href="#/products" className="text-xs text-white/90 px-3 py-1.5 rounded-lg bg-white/10 whitespace-nowrap">สินค้าทั้งหมด</a>
+          <a href="#/check" className="text-xs text-white/90 px-3 py-1.5 rounded-lg bg-white/10 whitespace-nowrap">ตรวจสอบประกัน</a>
+          <a href="#/contact" className="text-xs text-white/90 px-3 py-1.5 rounded-lg bg-white/10 whitespace-nowrap">ติดต่อเรา</a>
+        </div>
+      </header>
+
+      <main className="flex-1">{children}</main>
+
+      <footer className="border-t border-slate-200 bg-white mt-10">
+        <div className="max-w-7xl mx-auto px-4 py-6 text-center text-xs text-slate-500">
+          © {new Date().getFullYear()} Battery Warranty Management System
+        </div>
+      </footer>
+    </div>
+  );
+}
+
+/* =============================================================
+   HOME PAGE
+   ============================================================= */
+function HomePage() {
+  const [categories, setCategories] = useState([]);
+  const [contacts, setContacts] = useState([]);
+  const [products, setProducts] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [categoryModal, setCategoryModal] = useState(null);
+  const [productDetail, setProductDetail] = useState(null);
+
+  useEffect(()=>{(async()=>{
+    try {
+      const [c, ct, p] = await Promise.all([
+        listActiveCategories(),
+        listActiveContacts(),
+        listActiveProducts()
+      ]);
+      setCategories(c); setContacts(ct); setProducts(p);
+    } catch(e) { console.error(e); }
+    finally { setLoading(false); }
+  })();},[]);
+
+  const countByCategory = useMemo(()=>{
+    const map = {};
+    products.forEach(p=>{
+      const catId = p.categoryId || p.category || '';
+      if (catId) map[catId] = (map[catId]||0) + 1;
+    });
+    return map;
+  },[products]);
+
+  const featuredProducts = useMemo(()=> products.slice(0, 8), [products]);
+  const latestProducts = useMemo(()=> products.slice(0, 10), [products]);
+
+  const productsInCategory = useMemo(()=>{
+    if (!categoryModal) return [];
+    return products.filter(p => (p.categoryId || p.category) === categoryModal.id);
+  },[products, categoryModal]);
+
+  if (loading) return <Spinner/>;
+
+  return (
+    <div className="max-w-7xl mx-auto px-4 py-6 sm:py-8 space-y-10">
+
+      {/* HERO — ตรวจสอบประกัน */}
+      <section className="bg-gradient-to-br from-blue-600 via-blue-700 to-indigo-700 rounded-3xl p-6 sm:p-10 text-white shadow-xl">
+        <div className="grid md:grid-cols-2 gap-6 items-center">
+          <div>
+            <div className="inline-flex items-center gap-2 bg-white/20 backdrop-blur px-3 py-1 rounded-full text-xs font-medium mb-4">
+              🛡️ ระบบตรวจสอบการรับประกัน
+            </div>
+            <h1 className="text-2xl sm:text-4xl font-bold leading-tight">
+              ตรวจสอบการรับประกัน<br/>แบตเตอรี่ของคุณ
+            </h1>
+            <p className="mt-3 text-white/80 text-sm sm:text-base">
+              กรอก Serial Number ที่อยู่บนสินค้า เพื่อดูสถานะการรับประกันได้ทันที
+            </p>
+            <div className="mt-6 flex flex-col sm:flex-row gap-3">
+              <a href="#/check"
+                 className="inline-flex items-center justify-center gap-2 bg-white text-blue-700 font-semibold px-6 py-3 rounded-xl hover:bg-blue-50 transition shadow-lg">
+                🔍 ตรวจสอบการรับประกัน
+              </a>
+              <a href="#/products"
+                 className="inline-flex items-center justify-center gap-2 bg-white/15 backdrop-blur text-white font-medium px-6 py-3 rounded-xl hover:bg-white/25 transition border border-white/20">
+                🛍️ ดูสินค้าทั้งหมด
+              </a>
+            </div>
+          </div>
+          <div className="hidden md:flex justify-center">
+  {/* ลบ p-4 ออก เพื่อให้รูปชิดขอบ */}
+  <div className="w-48 h-48 rounded-3xl bg-white/10 backdrop-blur flex items-center justify-center shadow-2xl border border-white/20 overflow-hidden">
+    <img 
+      src="743cdb8cfcdaeeee3008654a9ae3717a.jpg" 
+      alt="Logo" 
+      /* เปลี่ยนจาก object-contain เป็น object-cover */
+      className="w-full h-full object-cover" 
+    />
+  </div>
+</div>
+        </div>
+      </section>
+
+           {/* QUICK ACTIONS */}
+      <section className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <a href="#/check" className="flex flex-col items-center justify-center h-full bg-white rounded-2xl p-6 border border-slate-200 hover:border-blue-300 hover:shadow-md transition text-center group">
+          <div className="text-4xl mb-3 group-hover:scale-110 transition">🛡️</div>
+          <div className="font-semibold text-slate-800">ตรวจสอบประกัน</div>
+          <div className="text-sm text-slate-500 mt-1">ด้วย Serial Number</div>
+        </a>
+        <a href="#/products" className="flex flex-col items-center justify-center h-full bg-white rounded-2xl p-6 border border-slate-200 hover:border-blue-300 hover:shadow-md transition text-center group">
+          <div className="text-4xl mb-3 group-hover:scale-110 transition">🔋</div>
+          <div className="font-semibold text-slate-800">สินค้าทั้งหมด</div>
+          <div className="text-sm text-slate-500 mt-1">{products.length} รายการ</div>
+        </a>
+        <a href="#/contact" className="flex flex-col items-center justify-center h-full bg-white rounded-2xl p-6 border border-slate-200 hover:border-blue-300 hover:shadow-md transition text-center group">
+          <div className="text-4xl mb-3 group-hover:scale-110 transition">📞</div>
+          <div className="font-semibold text-slate-800">ติดต่อเรา</div>
+          <div className="text-sm text-slate-500 mt-1">ช่องทางติดต่อ</div>
+        </a>
+      </section>
+
+      {/* CATEGORIES — แบนเนอร์ 2 คอลัมน์ */}
+      {categories.length > 0 && (
+        <section>
+          <div className="flex items-end justify-between mb-4">
+            <div>
+              <h2 className="text-xl sm:text-2xl font-bold text-slate-900">หมวดหมู่แนะนำสำหรับคุณ</h2>
+              <p className="text-sm text-slate-500 mt-1">เลือกดูสินค้าตามหมวดหมู่ที่สนใจ</p>
+            </div>
+            <a href="#/products" className="text-sm text-blue-600 hover:text-blue-700 font-medium whitespace-nowrap">
+              ดูเพิ่มเติม →
+            </a>
+          </div>
+          <div className="grid sm:grid-cols-2 gap-4">
+            {categories.map(c=>(
+              <button key={c.id} onClick={()=>setCategoryModal(c)}
+                className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden group hover:shadow-lg transition text-left">
+                <div className="aspect-[21/9] bg-slate-100 overflow-hidden">
+                  {c.image?.url ? (
+                    <img src={c.image.url} alt={c.name} className="w-full h-full object-cover group-hover:scale-105 transition duration-500"/>
+                  ) : (
+                    <div className="w-full h-full grid place-items-center text-slate-300 text-5xl bg-gradient-to-br from-blue-100 to-indigo-100">🖼️</div>
+                  )}
+                </div>
+                <div className="p-4 flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="font-semibold text-slate-800 truncate">{c.name}</div>
+                    <div className="text-sm text-slate-500">สินค้า {countByCategory[c.id] || 0} รายการ</div>
+                  </div>
+                  <span className="text-xs font-medium bg-blue-600 text-white px-3 py-1.5 rounded-lg whitespace-nowrap">
+                    ดูสินค้า
+                  </span>
+                </div>
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* FEATURED PRODUCTS */}
+      {featuredProducts.length > 0 && (
+        <section>
+          <div className="flex items-end justify-between mb-4">
+            <div>
+              <h2 className="text-xl sm:text-2xl font-bold text-slate-900">สินค้าแนะนำสำหรับคุณ</h2>
+              <p className="text-sm text-slate-500 mt-1">สินค้าคุณภาพ พร้อมการรับประกัน</p>
+            </div>
+            <a href="#/products" className="text-sm text-blue-600 hover:text-blue-700 font-medium whitespace-nowrap">
+              ดูเพิ่มเติม →
+            </a>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
+            {featuredProducts.map(p=>(
+              <ProductCard key={p.id} product={p} onView={()=>setProductDetail(p)}/>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* LATEST PRODUCTS */}
+      {latestProducts.length > featuredProducts.length && (
+        <section>
+          <div className="flex items-end justify-between mb-4">
+            <div>
+              <h2 className="text-xl sm:text-2xl font-bold text-slate-900">สินค้าล่าสุด</h2>
+              <p className="text-sm text-slate-500 mt-1">อัปเดตสินค้าใหม่</p>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
+            {latestProducts.slice(featuredProducts.length).map(p=>(
+              <ProductCard key={p.id} product={p} onView={()=>setProductDetail(p)}/>
+            ))}
+          </div>
+        </section>
+      )}
+      {/* PRODUCT DETAIL MODAL */}
+      <Modal
+        open={!!productDetail}
+        onClose={()=>setProductDetail(null)}
+        title={productDetail?.name || ''}
+        size="lg"
+      >
+        {productDetail && (
+          <div className="grid sm:grid-cols-2 gap-5">
+            <ProductImageGallery images={productDetail.images || []} productName={productDetail.name} />
+            <div>
+              <h3 className="text-xl font-bold text-slate-900">{productDetail.name}</h3>
+              {productDetail.code && (
+                <div className="text-xs text-slate-500 mt-1">รหัส: {productDetail.code}</div>
+              )}
+              <div className="mt-3 flex items-baseline gap-2 flex-wrap">
+                {productDetail.salePrice > 0 && productDetail.salePrice < productDetail.price ? (
+                  <>
+                    <span className="text-blue-600 font-bold text-2xl">{fmtTHB(productDetail.salePrice)}</span>
+                    <span className="text-sm text-slate-400 line-through">{fmtTHB(productDetail.price)}</span>
+                  </>
+                ) : (
+                  <span className="text-blue-600 font-bold text-2xl">{fmtTHB(productDetail.price)}</span>
+                )}
+              </div>
+
+              <div className="mt-4 space-y-2 text-sm">
+                {productDetail.warrantyMonths > 0 && (
+                  <div className="flex items-center gap-2 text-slate-700">
+                    <span className="text-emerald-600">🛡️</span>
+                    <span>รับประกัน <b>{productDetail.warrantyMonths} เดือน</b></span>
+                  </div>
+                )}
+                <div className="flex items-center gap-2 text-slate-700">
+                  <span className={productDetail.stock > 0 ? 'text-emerald-600' : 'text-rose-600'}>
+                    {productDetail.stock > 0 ? '✓' : '✕'}
+                  </span>
+                  <span>{productDetail.stock > 0 ? `มีสินค้า (${productDetail.stock} ชิ้น)` : 'สินค้าหมด'}</span>
+                </div>
+              </div>
+
+              {productDetail.description && (
+                <div className="mt-4 pt-4 border-t border-slate-100">
+                  <div className="text-sm font-medium text-slate-700 mb-1">รายละเอียด</div>
+                  <p className="text-sm text-slate-600 whitespace-pre-line">{productDetail.description}</p>
+                </div>
+              )}
+
+              <div className="mt-5 pt-4 border-t border-slate-100">
+                <div className="text-sm font-medium text-slate-700 mb-2">สั่งซื้อ / สอบถาม</div>
+                {contacts.length === 0 ? (
+                  <div className="text-sm text-slate-500 text-center py-3 bg-slate-50 rounded-xl">
+                    ยังไม่มีช่องทางติดต่อ
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 gap-2">
+                    {contacts.slice(0, 4).map(c=>(
+                      <a key={c.id} href={resolveContactLink(c)} target="_blank" rel="noreferrer"
+                         className="flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-200 bg-white hover:bg-blue-50 hover:border-blue-300 transition text-sm">
+                        <span className="text-lg flex-shrink-0">{c.icon || '🔗'}</span>
+                        <div className="min-w-0">
+                          <div className="font-medium text-slate-800 truncate text-xs">{c.label}</div>
+                        </div>
+                      </a>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* CATEGORY MODAL */}
+      <Modal
+        open={!!categoryModal}
+        onClose={()=>setCategoryModal(null)}
+        title={`${categoryModal?.name || ''} (${productsInCategory.length})`}
+        size="xl"
+      >
+        {productsInCategory.length === 0 ? <EmptyState title="ยังไม่มีสินค้าในหมวดนี้" icon="🔋"/> : (
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
+            {productsInCategory.map(p=>(
+              <ProductCard key={p.id} product={p} onView={()=>{
+                setCategoryModal(null);
+                setProductDetail(p);
+              }}/>
+            ))}
+          </div>
+        )}
+      </Modal>
+    </div>
+  );
+}
+/* =============================================================
+   PRODUCT CARD + CONTACT CARD + HELPERS
+   ============================================================= */
+/* =============================================================
+   PRODUCT CARD + PRODUCT IMAGE GALLERY + CONTACT CARD + HELPERS
+   ============================================================= */
+
+function ProductCard({product, onView}) {
+  const outOfStock = (product.stock || 0) <= 0;
+  return (
+    <button onClick={onView}
+      className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col hover:shadow-lg hover:border-blue-300 transition text-left group w-full">
+      <div className="aspect-square bg-slate-100 overflow-hidden">
+        {product.images?.[0]?.url ? (
+          <img src={product.images[0].url} alt={product.name} className="w-full h-full object-cover group-hover:scale-105 transition duration-500"/>
+        ) : (
+          <div className="w-full h-full grid place-items-center text-slate-300 text-5xl">🔋</div>
+        )}
+      </div>
+      <div className="p-3 flex-1 flex flex-col">
+        <div className="font-medium text-slate-800 text-sm line-clamp-2 min-h-[40px]">{product.name}</div>
+        <div className="mt-2 flex items-baseline gap-2 flex-wrap">
+          {product.salePrice > 0 && product.salePrice < product.price ? (
+            <>
+              <span className="text-blue-600 font-bold">{fmtTHB(product.salePrice)}</span>
+              <span className="text-xs text-slate-400 line-through">{fmtTHB(product.price)}</span>
+            </>
+          ) : (
+            <span className="text-blue-600 font-bold">{fmtTHB(product.price)}</span>
+          )}
+        </div>
+        <div className="mt-2 flex items-center justify-between text-xs">
+          {product.warrantyMonths > 0 && (
+            <span className="text-emerald-600 font-medium">🛡️ {product.warrantyMonths} ด.</span>
+          )}
+          {outOfStock ? (
+            <span className="text-rose-500 font-medium">หมด</span>
+          ) : (
+            <span className="text-slate-400">เหลือ {product.stock}</span>
+          )}
+        </div>
+      </div>
+    </button>
+  );
+}
+
+/* ---------- Product Image Gallery (for detail modal) ---------- */
+function ProductImageGallery({images = [], productName = ''}) {
+  const [current, setCurrent] = useState(0);
+
+  useEffect(() => { setCurrent(0); }, [images]);
+
+  const go = useCallback((i) => {
+    if (!images.length) return;
+    if (i < 0) i = images.length - 1;
+    if (i >= images.length) i = 0;
+    setCurrent(i);
+  }, [images.length]);
+
+  useEffect(() => {
+    if (images.length <= 1) return;
+    const onKey = (e) => {
+      if (e.key === 'ArrowLeft') go(current - 1);
+      if (e.key === 'ArrowRight') go(current + 1);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [current, images.length, go]);
+
+  if (!images || images.length === 0) {
+    return (
+      <div className="aspect-square rounded-2xl overflow-hidden bg-slate-100 border border-slate-200">
+        <div className="w-full h-full grid place-items-center text-slate-300 text-6xl">🔋</div>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div className="relative aspect-square rounded-2xl overflow-hidden bg-slate-100 border border-slate-200 group select-none">
+        <img
+          src={images[current].url}
+          alt={productName}
+          className="w-full h-full object-cover"
+        />
+        {images.length > 1 && (
+          <>
+            <button
+              type="button"
+              onClick={() => go(current - 1)}
+              className="absolute left-2 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full bg-black/40 hover:bg-black/70 text-white grid place-items-center backdrop-blur transition opacity-0 group-hover:opacity-100 text-2xl leading-none pb-1"
+              aria-label="ก่อนหน้า"
+            >‹</button>
+            <button
+              type="button"
+              onClick={() => go(current + 1)}
+              className="absolute right-2 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full bg-black/40 hover:bg-black/70 text-white grid place-items-center backdrop-blur transition opacity-0 group-hover:opacity-100 text-2xl leading-none pb-1"
+              aria-label="ถัดไป"
+            >›</button>
+            <div className="absolute bottom-2 left-1/2 -translate-x-1/2 bg-black/55 text-white text-xs px-3 py-1 rounded-full backdrop-blur">
+              {current + 1} / {images.length}
+            </div>
+          </>
+        )}
+      </div>
+
+      {images.length > 1 && (
+        <div className="grid grid-cols-4 gap-2 mt-2">
+          {images.map((img, i) => (
+            <button
+              key={i}
+              type="button"
+              onClick={() => setCurrent(i)}
+              className={`aspect-square rounded-lg overflow-hidden border-2 bg-slate-100 transition
+                ${i === current
+                  ? 'border-blue-500 ring-2 ring-blue-200'
+                  : 'border-slate-200 hover:border-slate-400 opacity-80 hover:opacity-100'}`}
+            >
+              <img src={img.url} alt="" className="w-full h-full object-cover"/>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+function ContactCard({contact}) {
+  const link = resolveContactLink(contact);
+  return (
+    <a href={link} target="_blank" rel="noreferrer"
+       className="bg-slate-50 rounded-2xl border border-slate-200 p-4 flex flex-col items-center text-center hover:border-blue-300 hover:shadow-md hover:bg-white transition group">
+      <div className="text-3xl mb-2 group-hover:scale-110 transition">{contact.icon || '🔗'}</div>
+      <div className="font-medium text-slate-800 text-sm">{contact.label}</div>
+      <div className="text-xs text-slate-500 mt-1 break-all line-clamp-2">{contact.value}</div>
+    </a>
+  );
+}
+
+function resolveContactLink(c) {
+  if (c.link) return c.link;
+  const v = c.value || '';
+  switch (c.type) {
+    case 'line':     return `https://line.me/R/ti/p/${v.replace(/^@/,'%40')}`;
+    case 'facebook': return v.startsWith('http') ? v : `https://facebook.com/${v}`;
+    case 'phone':    return `tel:${v.replace(/[^\d+]/g,'')}`;
+    case 'email':    return `mailto:${v}`;
+    case 'tiktok':   return v.startsWith('http') ? v : `https://tiktok.com/@${v.replace(/^@/,'')}`;
+    case 'website':  return v.startsWith('http') ? v : `https://${v}`;
+    default:         return v.startsWith('http') ? v : `https://${v}`;
+  }
+}
+/* =============================================================
+   PUBLIC: PRODUCTS PAGE
+   ============================================================= */
+function ProductsPublicPage() {
+  const [products, setProducts] = useState([]);
+  const [categories, setCategories] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState('');
+  const [filterCat, setFilterCat] = useState('all');
+  const [detail, setDetail] = useState(null);
+
+  useEffect(()=>{(async()=>{
+    try {
+      const [p, c] = await Promise.all([listActiveProducts(), listActiveCategories()]);
+      setProducts(p); setCategories(c);
+    } finally { setLoading(false); }
+  })();},[]);
+
+  const filtered = useMemo(()=>{
+    const q = search.trim().toLowerCase();
+    return products.filter(p=>{
+      if (filterCat !== 'all' && (p.categoryId || p.category) !== filterCat) return false;
+      if (!q) return true;
+      return (p.name||'').toLowerCase().includes(q) || (p.code||'').toLowerCase().includes(q);
+    });
+  },[products, search, filterCat]);
+
+  return (
+    <div className="max-w-7xl mx-auto px-4 py-6 sm:py-8">
+      <div className="mb-6">
+        <h1 className="text-2xl sm:text-3xl font-bold text-slate-900">สินค้าทั้งหมด</h1>
+        <p className="text-sm text-slate-500 mt-1">{products.length} รายการ · คลิกสินค้าเพื่อดูรายละเอียด</p>
+      </div>
+
+      <div className="bg-white rounded-2xl border border-slate-200 p-4 mb-6 grid sm:grid-cols-3 gap-3">
+        <div className="sm:col-span-2">
+          <input type="text" placeholder="ค้นหาชื่อสินค้า, รหัส..."
+            value={search} onChange={e=>setSearch(e.target.value)}
+            className="w-full rounded-lg border border-slate-300 px-3.5 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"/>
+        </div>
+        <select value={filterCat} onChange={e=>setFilterCat(e.target.value)}
+          className="w-full rounded-lg border border-slate-300 px-3.5 py-2.5 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100">
+          <option value="all">ทุกหมวดหมู่</option>
+          {categories.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
+        </select>
+      </div>
+
+      {loading ? <Spinner/> : filtered.length === 0 ? (
+        <EmptyState title="ไม่พบสินค้า" icon="🔋"/>
+      ) : (
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
+          {filtered.map(p=>(
+            <ProductCard key={p.id} product={p} onView={()=>setDetail(p)}/>
+          ))}
+        </div>
+      )}
+
+      <Modal open={!!detail} onClose={()=>setDetail(null)} title={detail?.name || ''} size="lg">
+        {detail && (
+          <div className="grid sm:grid-cols-2 gap-5">
+           <ProductImageGallery images={detail.images || []} productName={detail.name} />         
+        <div>
+              <h3 className="text-xl font-bold text-slate-900">{detail.name}</h3>
+              {detail.code && <div className="text-xs text-slate-500 mt-1">รหัส: {detail.code}</div>}
+              <div className="mt-3">
+                <span className="text-blue-600 font-bold text-2xl">{fmtTHB(detail.salePrice || detail.price)}</span>
+              </div>
+              {detail.warrantyMonths > 0 && (
+                <div className="mt-3 text-sm text-emerald-600 font-medium">🛡️ รับประกัน {detail.warrantyMonths} เดือน</div>
+              )}
+              {detail.description && (
+                <div className="mt-4 pt-4 border-t border-slate-100">
+                  <p className="text-sm text-slate-600 whitespace-pre-line">{detail.description}</p>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </Modal>
+    </div>
+  );
+}
+
+/* =============================================================
+   PUBLIC: CONTACT PAGE
+   ============================================================= */
+function ContactPublicPage() {
+  const [contacts, setContacts] = useState([]);
+  const [loading, setLoading] = useState(true);
+  useEffect(()=>{(async()=>{
+    try { setContacts(await listActiveContacts()); }
+    finally { setLoading(false); }
+  })();},[]);
+
+  return (
+    <div className="max-w-4xl mx-auto px-4 py-6 sm:py-10">
+      <div className="text-center mb-8">
+        <h1 className="text-2xl sm:text-3xl font-bold text-slate-900">ติดต่อเรา</h1>
+        <p className="text-sm text-slate-500 mt-2">ช่องทางสั่งซื้อและสอบถามข้อมูล</p>
+      </div>
+
+      {loading ? <Spinner/> : contacts.length === 0 ? (
+        <EmptyState title="ยังไม่มีช่องทางติดต่อ" icon="📞"/>
+      ) : (
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+          {contacts.map(c=>(
+            <a key={c.id} href={resolveContactLink(c)} target="_blank" rel="noreferrer"
+               className="bg-white rounded-2xl border border-slate-200 p-6 flex flex-col items-center text-center hover:border-blue-300 hover:shadow-lg transition group">
+              <div className="text-5xl mb-3 group-hover:scale-110 transition">{c.icon || '🔗'}</div>
+              <div className="font-semibold text-slate-800">{c.label}</div>
+              <div className="text-sm text-slate-500 mt-1 break-all">{c.value}</div>
+            </a>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* =============================================================
+   CHECK WARRANTY PAGE
+   ============================================================= */
+function CheckWarrantyPage() {
+  const [serial, setSerial] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState('');
+  const [attempts, setAttempts] = useState(0);
+  const [cooldown, setCooldown] = useState(false);
+  const lastReq = useRef(0);
+
+  useEffect(() => { if (cooldown) { const t=setTimeout(()=>setCooldown(false), 5000); return ()=>clearTimeout(t); } }, [cooldown]);
+
+  const submit = async (e) => {
+    e?.preventDefault();
+    const clean = serial.trim().toUpperCase();
+    if (!clean) { setError('กรุณากรอก Serial Number'); return; }
+    if (cooldown) return;
+    const now = Date.now();
+    if (now - lastReq.current < 1500) { setError('กรุณารอสักครู่ก่อนตรวจสอบอีกครั้ง'); return; }
+    lastReq.current = now;
+    setError(''); setResult(null); setLoading(true);
+    try {
+      const data = await lookupWarranty(clean);
+      if (!data) {
+        const n = attempts+1; setAttempts(n);
+        if (n >= 5) { setCooldown(true); setAttempts(0); }
+        setResult({type:'notfound'});
+      } else {
+        setAttempts(0);
+        const s = warrantyStatus(data.endDate);
+        setResult({ type: s.status === 'ACTIVE' ? 'active' : 'expired', data, daysLeft: s.daysLeft });
+      }
+    } catch (err) { setError('เกิดข้อผิดพลาด กรุณาลองใหม่อีกครั้ง'); }
+    finally { setLoading(false); }
+  };
+
+  const Row = ({label, value}) => (
+    <div>
+      <dt className="text-slate-500">{label}</dt>
+      <dd className="font-medium text-slate-800">{value||'-'}</dd>
+    </div>
+  );
+
+  return (
+    <div className="max-w-2xl mx-auto px-4 py-10 sm:py-16">
+      <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6 sm:p-8">
+        <h1 className="text-2xl font-bold text-slate-900">ตรวจสอบการรับประกัน</h1>
+        <p className="text-slate-500 mt-1 text-sm">กรอก Serial Number ที่อยู่บนตัวสินค้า</p>
+        <form onSubmit={submit} className="mt-6 space-y-4">
+          <Input label="Serial Number" placeholder="BAT-2026-00125" value={serial}
+                 onChange={e=>setSerial(e.target.value.toUpperCase())}
+                 error={error} autoFocus disabled={cooldown}/>
+          <Button type="submit" size="lg" disabled={loading||cooldown} className="w-full">
+            {loading?'กำลังตรวจสอบ...':cooldown?'รอสักครู่...':'ตรวจสอบประกัน'}
+          </Button>
+        </form>
+
+        {loading && <Spinner label="กำลังค้นหาข้อมูล..."/>}
+
+        {!loading && result?.type==='active' && (
+          <div className="fade-in mt-6 rounded-2xl border border-emerald-200 bg-emerald-50 p-5">
+            <div className="flex items-center gap-2 mb-3 flex-wrap">
+              <span className="text-2xl">✓</span>
+              <span className="font-semibold text-emerald-800">พบข้อมูลแบตเตอรี่</span>
+              <Badge color="green">อยู่ในประกัน</Badge>
+            </div>
+            <dl className="grid sm:grid-cols-2 gap-x-4 gap-y-3 text-sm">
+              <Row label="สินค้า" value={result.data.productName}/>
+              <Row label="Serial Number" value={result.data.serialNumber}/>
+              <Row label="วันที่ซื้อ" value={fmtDate(result.data.purchaseDate||result.data.startDate)}/>
+              <Row label="เริ่มรับประกัน" value={fmtDate(result.data.startDate)}/>
+              <Row label="วันหมดประกัน" value={fmtDate(result.data.endDate)}/>
+              <Row label="ระยะเวลา" value={`${result.data.months} เดือน`}/>
+            </dl>
+            <div className="mt-4 text-emerald-800 font-medium">เหลืออีก {result.daysLeft} วัน</div>
+          </div>
+        )}
+
+        {!loading && result?.type==='expired' && (
+          <div className="fade-in mt-6 rounded-2xl border border-rose-200 bg-rose-50 p-5">
+            <div className="flex items-center gap-2 mb-3 flex-wrap">
+              <span className="text-2xl">✕</span>
+              <span className="font-semibold text-rose-800">หมดระยะเวลารับประกัน</span>
+              <Badge color="red">หมดประกัน</Badge>
+            </div>
+            <dl className="grid sm:grid-cols-2 gap-x-4 gap-y-3 text-sm">
+              <Row label="สินค้า" value={result.data.productName}/>
+              <Row label="Serial Number" value={result.data.serialNumber}/>
+              <Row label="วันหมดประกัน" value={fmtDate(result.data.endDate)}/>
+            </dl>
+          </div>
+        )}
+
+        {!loading && result?.type==='notfound' && (
+          <div className="fade-in mt-6 rounded-2xl border border-slate-200 bg-slate-50 p-5 text-slate-700">
+            <div className="font-semibold mb-1">ไม่พบข้อมูล Serial Number นี้</div>
+            <div className="text-sm">กรุณาตรวจสอบ Serial Number และลองใหม่อีกครั้ง</div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* =============================================================
+   ADMIN LOGIN
+   ============================================================= */
+function LoginPage() {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const toast = useToast();
+  const { user, isAdmin, loading: authLoading, logout } = useAuth();
+
+  useEffect(() => {
+    if (authLoading) return;
+    if (user && isAdmin && window.location.hash !== '#/admin/dashboard') {
+      window.location.hash = '#/admin/dashboard';
+    }
+  }, [user, isAdmin, authLoading]);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setError('');
+    if (!email || !password) { setError('กรุณากรอกอีเมลและรหัสผ่าน'); return; }
+    setLoading(true);
+    try {
+      await auth.signInWithEmailAndPassword(email.trim(), password);
+      toast.success('เข้าสู่ระบบสำเร็จ');
+    } catch(err) {
+      const msg = err.code==='auth/invalid-credential'||err.code==='auth/wrong-password'
+          ? 'อีเมลหรือรหัสผ่านไม่ถูกต้อง'
+        : err.code==='auth/user-not-found' ? 'ไม่พบบัญชีผู้ใช้'
+        : err.code==='auth/invalid-email' ? 'รูปแบบอีเมลไม่ถูกต้อง'
+        : err.code==='auth/operation-not-allowed' ? 'ยังไม่เปิดใช้ Email/Password'
+        : err.code==='auth/too-many-requests' ? 'พยายามหลายครั้งเกินไป'
+        : `เข้าสู่ระบบไม่สำเร็จ (${err.code||'unknown'})`;
+      setError(msg);
+    } finally { setLoading(false); }
+  };
+
+  const signedInButNotAdmin = !authLoading && user && !isAdmin;
+
+  return (
+    <div className="min-h-screen grid place-items-center bg-gradient-to-br from-slate-100 to-slate-50 p-4">
+      <div className="w-full max-w-md">
+        <a href="#/" className="flex items-center gap-2 justify-center mb-6">
+          <div className="w-10 h-10 rounded-xl bg-brand-600 grid place-items-center text-white font-bold">B</div>
+          <span className="font-semibold text-slate-800">Battery Warranty</span>
+        </a>
+        <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6 sm:p-8">
+          <h1 className="text-2xl font-bold text-slate-900">Admin Login</h1>
+          <p className="text-sm text-slate-500 mt-1">สำหรับผู้ดูแลระบบเท่านั้น</p>
+
+          {signedInButNotAdmin ? (
+            <div className="mt-6 space-y-4">
+              <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+                <div className="font-semibold mb-1">⚠️ บัญชีนี้ไม่มีสิทธิ์ Admin</div>
+                <p>เข้าสู่ระบบด้วย <b>{user.email}</b> สำเร็จ แต่ไม่พบ role <code>admin</code></p>
+                <p className="mt-2 text-xs">UID: <code className="break-all">{user.uid}</code></p>
+              </div>
+              <Button variant="outline" className="w-full" onClick={logout}>ออกจากระบบแล้วลองใหม่</Button>
+            </div>
+          ) : (
+            <form onSubmit={submit} className="mt-6 space-y-4">
+              <Input label="อีเมล" type="email" value={email} onChange={e=>setEmail(e.target.value)} autoComplete="username"/>
+              <Input label="รหัสผ่าน" type="password" value={password} onChange={e=>setPassword(e.target.value)} autoComplete="current-password"/>
+              {error && <div className="text-sm text-rose-600 bg-rose-50 border border-rose-200 px-3 py-2 rounded-lg">{error}</div>}
+              <Button type="submit" size="lg" className="w-full" disabled={loading||authLoading}>
+                {loading?'กำลังเข้าสู่ระบบ...':authLoading?'กำลังตรวจสอบ...':'เข้าสู่ระบบ'}
+              </Button>
+            </form>
+          )}
+          <div className="mt-4 text-center text-xs text-slate-500">
+            <a href="#/" className="hover:text-brand-700">← กลับสู่หน้าหลัก</a>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* =============================================================
+   ADMIN LAYOUT
+   ============================================================= */
+const adminMenu = [
+  {hash:'#/admin/dashboard', label:'Dashboard', icon:'📊'},
+  {hash:'#/admin/products', label:'สินค้า', icon:'🔋'},
+  {hash:'#/admin/categories', label:'หมวดหมู่', icon:'📂'},
+  {hash:'#/admin/contacts', label:'ช่องทางติดต่อ', icon:'📞'},
+  {hash:'#/admin/warranties', label:'Warranty', icon:'🛡️'},
+  {hash:'#/admin/claims', label:'เคลม', icon:'🔧'},
+  {hash:'#/admin/revenue', label:'รายได้', icon:'💰'},
+  {hash:'#/admin/reports', label:'รายงาน', icon:'📄'},
+  {hash:'#/admin/audit', label:'Audit Log', icon:'🧾'}
+];
+
+function AdminLayout({current, children}) {
+  const { user, logout } = useAuth();
+  const [open, setOpen] = useState(false);
+  const doLogout = async () => { await logout(); window.location.hash = '#/admin/login'; };
+  return (
+    <div className="min-h-screen bg-slate-50">
+      <header className="sticky top-0 z-30 bg-white border-b border-slate-200">
+        <div className="px-4 h-14 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <button className="lg:hidden text-2xl leading-none" onClick={()=>setOpen(v=>!v)}>☰</button>
+            <div className="flex items-center gap-2">
+              <div className="w-8 h-8 rounded-lg bg-brand-600 grid place-items-center text-white text-sm font-bold">B</div>
+              <span className="font-semibold">Admin</span>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="hidden sm:block text-sm text-slate-500">{user?.email}</span>
+            <Button variant="outline" size="sm" onClick={doLogout}>ออกจากระบบ</Button>
+          </div>
+        </div>
+      </header>
+      <div className="flex">
+        <aside className={`fixed lg:sticky lg:top-14 lg:h-[calc(100vh-3.5rem)] inset-y-0 left-0 z-20 w-64 bg-white border-r border-slate-200 transform transition-transform overflow-y-auto
+          ${open?'translate-x-0':'-translate-x-full'} lg:translate-x-0`}>
+          <nav className="p-3 space-y-1 mt-14 lg:mt-0">
+            {adminMenu.map(it=>(
+              <a key={it.hash} href={it.hash} onClick={()=>setOpen(false)}
+                 className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition
+                   ${current===it.hash?'bg-brand-50 text-brand-700':'text-slate-600 hover:bg-slate-50'}`}>
+                <span className="text-lg">{it.icon}</span>{it.label}
+              </a>
+            ))}
+          </nav>
+        </aside>
+        {open && <div className="fixed inset-0 z-10 bg-black/30 lg:hidden" onClick={()=>setOpen(false)}/>}
+        <main className="flex-1 min-w-0 p-4 sm:p-6">{children}</main>
+      </div>
+    </div>
+  );
+}
+
+/* =============================================================
+   ADMIN: CATEGORIES
+   ============================================================= */
+function CategoriesPage() {
+  const { user } = useAuth();
+  const toast = useToast();
+  const [items, setItems] = useState([]);
+  const [products, setProducts] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [editing, setEditing] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const [c, p] = await Promise.all([listCategories(), listProducts()]);
+      setItems(c); setProducts(p);
+    } catch { toast.error('โหลดไม่สำเร็จ'); }
+    finally { setLoading(false); }
+  };
+  useEffect(()=>{ load(); },[]);
+
+  const countByCategory = useMemo(()=>{
+    const map = {};
+    products.forEach(p=>{
+      const catId = p.categoryId || p.category || '';
+      if (catId) map[catId] = (map[catId]||0) + 1;
+    });
+    return map;
+  },[products]);
+
+  const openNew = () => setEditing({
+    id: null, name:'', description:'', order: items.length, active:true, image:null
+  });
+
+  const openEdit = (c) => setEditing({ ...c, image: c.image || null });
+
+  const save = async () => {
+    if (!editing.name?.trim()) { toast.error('กรุณากรอกชื่อหมวดหมู่'); return; }
+    setSaving(true);
+    try {
+      const payload = {
+        name: editing.name.trim(),
+        description: editing.description || '',
+        order: Number(editing.order) || 0,
+        active: editing.active !== false,
+        image: editing.image || null
+      };
+      if (editing.id) {
+        await updateCategory(editing.id, editing, payload, user);
+        toast.success('อัปเดตหมวดหมู่สำเร็จ');
+      } else {
+        await createCategory(payload, user);
+        toast.success('เพิ่มหมวดหมู่สำเร็จ');
+      }
+      setEditing(null);
+      await load();
+    } catch(e) { toast.error(e.message||'บันทึกไม่สำเร็จ'); }
+    finally { setSaving(false); }
+  };
+
+  const confirmDelete = async () => {
+    try {
+      await deleteCategory(deleteTarget.id, deleteTarget, user);
+      toast.success('ลบหมวดหมู่แล้ว');
+      setDeleteTarget(null);
+      await load();
+    } catch(e) { toast.error(e.message||'ลบไม่สำเร็จ'); }
+  };
+
+  return (
+    <div className="space-y-5">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold">หมวดหมู่สินค้า</h1>
+          <p className="text-sm text-slate-500">จัดการหมวดหมู่ที่จะแสดงบนหน้าแรก</p>
+        </div>
+        <Button onClick={openNew}>+ เพิ่มหมวดหมู่</Button>
+      </div>
+
+      <Card>
+        {loading ? <Spinner/> : items.length===0 ? (
+          <EmptyState title="ยังไม่มีหมวดหมู่" description="กดปุ่ม '+ เพิ่มหมวดหมู่' เพื่อเริ่มต้น" icon="📂"/>
+        ) : (
+          <div className="grid sm:grid-cols-2 gap-4">
+            {items.map(c=>(
+              <div key={c.id} className="rounded-2xl border border-slate-200 overflow-hidden bg-white flex flex-col">
+                <div className="aspect-[21/9] bg-slate-100">
+                  {c.image?.url ? (
+                    <img src={c.image.url} alt="" className="w-full h-full object-cover"/>
+                  ) : (
+                    <div className="w-full h-full grid place-items-center text-slate-300 text-4xl">🖼️</div>
+                  )}
+                </div>
+                <div className="p-4 flex-1 flex flex-col">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="font-semibold text-slate-800 truncate">{c.name}</div>
+                      <div className="text-xs text-slate-500 mt-0.5">สินค้า {countByCategory[c.id] || 0} รายการ · ลำดับ {c.order||0}</div>
+                    </div>
+                    {c.active === false ? <Badge color="slate">ปิด</Badge> : <Badge color="green">ใช้งาน</Badge>}
+                  </div>
+                  {c.description && <div className="text-sm text-slate-500 mt-2 line-clamp-2">{c.description}</div>}
+                  <div className="mt-3 flex gap-2 justify-end">
+                    <Button size="sm" variant="outline" onClick={()=>openEdit(c)}>แก้ไข</Button>
+                    <Button size="sm" variant="danger" onClick={()=>setDeleteTarget(c)}>ลบ</Button>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+
+      <Modal
+        open={!!editing}
+        onClose={()=>setEditing(null)}
+        title={editing?.id ? 'แก้ไขหมวดหมู่' : 'เพิ่มหมวดหมู่'}
+        size="lg"
+        footer={<div className="flex justify-end gap-2">
+          <Button variant="secondary" onClick={()=>setEditing(null)}>ยกเลิก</Button>
+          <Button onClick={save} disabled={saving}>{saving?'กำลังบันทึก...':'บันทึก'}</Button>
+        </div>}
+      >
+        {editing && (
+          <div className="space-y-4">
+            <div className="grid sm:grid-cols-2 gap-4">
+              <Input label="ชื่อหมวดหมู่ *" value={editing.name}
+                     onChange={e=>setEditing(x=>({...x,name:e.target.value}))}/>
+              <Input label="ลำดับ" type="number" value={editing.order}
+                     onChange={e=>setEditing(x=>({...x,order:e.target.value}))}/>
+              <div className="sm:col-span-2">
+                <Input as="textarea" rows={2} label="คำอธิบาย" value={editing.description}
+                       onChange={e=>setEditing(x=>({...x,description:e.target.value}))}/>
+              </div>
+              <div className="sm:col-span-2">
+                <label className="flex items-center gap-2">
+                  <input type="checkbox" checked={editing.active !== false}
+                         onChange={e=>setEditing(x=>({...x,active:e.target.checked}))}/>
+                  <span>แสดงบนหน้าแรก</span>
+                </label>
+              </div>
+            </div>
+            <div>
+              <div className="text-sm font-medium text-slate-700 mb-2">แบนเนอร์หมวดหมู่ (แนะนำอัตราส่วน 21:9)</div>
+              <SingleImageUploader
+                value={editing.image}
+                onChange={img=>setEditing(x=>({...x,image:img}))}
+                folder="categories"
+                id={editing.id || `temp-${Date.now()}`}
+                name="banner"
+                aspect="aspect-[21/9]"
+                label="อัปโหลดแบนเนอร์"
+              />
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      <Confirm
+        open={!!deleteTarget} onClose={()=>setDeleteTarget(null)} onConfirm={confirmDelete}
+        title="ลบหมวดหมู่" danger
+        message={`คุณต้องการลบ "${deleteTarget?.name}" ใช่หรือไม่?\nการลบจะไม่ลบสินค้าในหมวดนี้`}
+        confirmText="ลบ"
+      />
+    </div>
+  );
+}
+
+/* =============================================================
+   ADMIN: CONTACTS
+   ============================================================= */
+function ContactsPage() {
+  const { user } = useAuth();
+  const toast = useToast();
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [editing, setEditing] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+
+  const load = async () => {
+    setLoading(true);
+    try { setItems(await listContacts()); }
+    catch { toast.error('โหลดไม่สำเร็จ'); }
+    finally { setLoading(false); }
+  };
+  useEffect(()=>{ load(); },[]);
+
+  const openNew = () => setEditing({
+    id:null, type:'line', label:'LINE', value:'', link:'',
+    icon:'💬', order: items.length, active:true
+  });
+
+  const openEdit = (c) => setEditing({ ...c });
+
+  const setType = (t) => {
+    const def = CONTACT_TYPES.find(x=>x.value===t);
+    setEditing(x=>({ ...x, type:t, icon: def?.icon || '🔗', label: def?.label || x.label }));
+  };
+
+  const save = async () => {
+    if (!editing.label?.trim()) { toast.error('กรุณากรอกชื่อช่องทาง'); return; }
+    if (!editing.value?.trim()) { toast.error('กรุณากรอกข้อมูลช่องทาง'); return; }
+    setSaving(true);
+    try {
+      const payload = {
+        type: editing.type,
+        label: editing.label.trim(),
+        value: editing.value.trim(),
+        link: (editing.link || '').trim(),
+        icon: editing.icon || '🔗',
+        order: Number(editing.order) || 0,
+        active: editing.active !== false
+      };
+      if (editing.id) {
+        await updateContact(editing.id, editing, payload, user);
+        toast.success('อัปเดตช่องทางสำเร็จ');
+      } else {
+        await createContact(payload, user);
+        toast.success('เพิ่มช่องทางสำเร็จ');
+      }
+      setEditing(null);
+      await load();
+    } catch(e) { toast.error(e.message||'บันทึกไม่สำเร็จ'); }
+    finally { setSaving(false); }
+  };
+
+  const confirmDelete = async () => {
+    try {
+      await deleteContact(deleteTarget.id, deleteTarget, user);
+      toast.success('ลบช่องทางแล้ว');
+      setDeleteTarget(null);
+      await load();
+    } catch(e) { toast.error(e.message||'ลบไม่สำเร็จ'); }
+  };
+
+  return (
+    <div className="space-y-5">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold">ช่องทางติดต่อ</h1>
+          <p className="text-sm text-slate-500">ช่องทางที่จะแสดงบนหน้าแรก และปุ่มสั่งซื้อ</p>
+        </div>
+        <Button onClick={openNew}>+ เพิ่มช่องทาง</Button>
+      </div>
+
+      <Card>
+        {loading ? <Spinner/> : items.length===0 ? (
+          <EmptyState title="ยังไม่มีช่องทางติดต่อ" description="กดปุ่ม '+ เพิ่มช่องทาง' เพื่อเริ่มต้น" icon="📞"/>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {items.map(c=>(
+              <div key={c.id} className="rounded-2xl border border-slate-200 p-4 bg-white">
+                <div className="flex items-start gap-3">
+                  <div className="text-3xl flex-shrink-0">{c.icon || '🔗'}</div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-semibold text-slate-800">{c.label}</span>
+                      {c.active === false ? <Badge color="slate">ปิด</Badge> : <Badge color="green">ใช้งาน</Badge>}
+                    </div>
+                    <div className="text-xs text-slate-400 mt-0.5">ประเภท: {c.type} · ลำดับ {c.order||0}</div>
+                    <div className="text-sm text-slate-600 mt-1 break-all">{c.value}</div>
+                    {c.link && <div className="text-xs text-slate-400 mt-1 break-all">🔗 {c.link}</div>}
+                  </div>
+                </div>
+                <div className="mt-3 flex gap-2 justify-end">
+                  <Button size="sm" variant="outline" onClick={()=>openEdit(c)}>แก้ไข</Button>
+                  <Button size="sm" variant="danger" onClick={()=>setDeleteTarget(c)}>ลบ</Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+
+      <Modal
+        open={!!editing}
+        onClose={()=>setEditing(null)}
+        title={editing?.id ? 'แก้ไขช่องทางติดต่อ' : 'เพิ่มช่องทางติดต่อ'}
+        size="lg"
+        footer={<div className="flex justify-end gap-2">
+          <Button variant="secondary" onClick={()=>setEditing(null)}>ยกเลิก</Button>
+          <Button onClick={save} disabled={saving}>{saving?'กำลังบันทึก...':'บันทึก'}</Button>
+        </div>}
+      >
+        {editing && (
+          <div className="space-y-4">
+            <div>
+              <div className="text-sm font-medium text-slate-700 mb-2">ประเภทช่องทาง</div>
+              <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
+                {CONTACT_TYPES.map(t=>(
+                  <button key={t.value} type="button"
+                    onClick={()=>setType(t.value)}
+                    className={`flex flex-col items-center gap-1 p-2 rounded-xl border-2 transition
+                      ${editing.type===t.value ? 'border-brand-500 bg-brand-50' : 'border-slate-200 hover:border-slate-300'}`}>
+                    <span className="text-2xl">{t.icon}</span>
+                    <span className="text-xs font-medium text-slate-700">{t.label}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="grid sm:grid-cols-2 gap-4">
+              <Input label="ชื่อช่องทาง *" value={editing.label}
+                     onChange={e=>setEditing(x=>({...x,label:e.target.value}))}
+                     placeholder="เช่น LINE, Facebook, โทรศัพท์"/>
+              <Input label="ไอคอน (emoji)" value={editing.icon}
+                     onChange={e=>setEditing(x=>({...x,icon:e.target.value}))}
+                     placeholder="💬 📞 ✉️"/>
+              <div className="sm:col-span-2">
+                <Input label="ข้อมูลที่จะแสดง *" value={editing.value}
+                       onChange={e=>setEditing(x=>({...x,value:e.target.value}))}
+                       placeholder={CONTACT_TYPES.find(x=>x.value===editing.type)?.placeholder || ''}
+                       hint="เช่น @yourline, 08x-xxx-xxxx, you@email.com"/>
+              </div>
+              <div className="sm:col-span-2">
+                <Input label="ลิงก์ปลายทาง (ถ้ามี)" value={editing.link}
+                       onChange={e=>setEditing(x=>({...x,link:e.target.value}))}
+                       placeholder="https://... (ถ้าเว้นว่าง ระบบจะสร้างให้อัตโนมัติ)"
+                       hint="หากปล่อยว่าง ระบบจะสร้างลิงก์จากข้อมูลด้านบนให้อัตโนมัติ"/>
+              </div>
+              <Input label="ลำดับการแสดง" type="number" value={editing.order}
+                     onChange={e=>setEditing(x=>({...x,order:e.target.value}))}/>
+              <label className="flex items-center gap-2 self-end pb-2.5">
+                <input type="checkbox" checked={editing.active !== false}
+                       onChange={e=>setEditing(x=>({...x,active:e.target.checked}))}/>
+                <span>แสดงบนหน้าแรก</span>
+              </label>
+            </div>
+
+            {editing.value && (
+              <div className="rounded-xl bg-slate-50 border border-slate-200 p-3 text-sm">
+                <div className="text-slate-500 text-xs mb-1">ตัวอย่าง:</div>
+                <div className="flex items-center gap-2">
+                  <span className="text-2xl">{editing.icon || '🔗'}</span>
+                  <div>
+                    <div className="font-medium">{editing.label || 'ชื่อช่องทาง'}</div>
+                    <div className="text-xs text-slate-500">{editing.value}</div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </Modal>
+
+      <Confirm
+        open={!!deleteTarget} onClose={()=>setDeleteTarget(null)} onConfirm={confirmDelete}
+        title="ลบช่องทางติดต่อ" danger
+        message={`คุณต้องการลบ "${deleteTarget?.label}" ใช่หรือไม่?`}
+        confirmText="ลบ"
+      />
+    </div>
+  );
+}
+
+/* =============================================================
+   ADMIN: DASHBOARD
+   ============================================================= */
+function DashboardPage() {
+  const [loading, setLoading] = useState(true);
+  const [products, setProducts] = useState([]);
+  const [warranties, setWarranties] = useState([]);
+  const [claims, setClaims] = useState([]);
+  const [sales, setSales] = useState([]);
+
+  useEffect(()=>{(async()=>{
+    try {
+      const safe = (p) => p.catch(e => { console.warn('load fail:', e.message); return []; });
+      const [p,w,c,s] = await Promise.all([
+        safe(listProducts()), safe(listWarranties()), safe(listClaims()), safe(listSales())
+      ]);
+      setProducts(p); setWarranties(w); setClaims(c); setSales(s);
+    } finally { setLoading(false); }
+  })();},[]);
+
+  const stats = useMemo(()=>{
+    const now = new Date();
+    const sD = new Date(now.getFullYear(),now.getMonth(),now.getDate());
+    const sM = new Date(now.getFullYear(),now.getMonth(),1);
+    const sY = new Date(now.getFullYear(),0,1);
+    const totalStock = products.reduce((a,p)=>a+(p.stock||0),0);
+    const lowStock = products.filter(p=>(p.stock||0)>0 && (p.stock||0)<=(p.threshold??5)).length;
+    const outStock = products.filter(p=>(p.stock||0)<=0).length;
+    const at = s => toDate(s.createdAt) || new Date(0);
+    const f = d => sales.filter(s=>at(s)>=d);
+    const sum = (arr,k)=>arr.reduce((a,x)=>a+(x[k]||0),0);
+    const active = warranties.filter(w=>warrantyStatus(w.endDate).status==='ACTIVE').length;
+    const claimCounts = claims.reduce((a,c)=>{a[c.status]=(a[c.status]||0)+1; return a;},{});
+    return { totalStock, lowStock, outStock,
+      salesToday: f(sD).length, salesMonth: f(sM).length,
+      revenueToday: sum(f(sD),'revenue'), revenueMonth: sum(f(sM),'revenue'),
+      revenueYear: sum(f(sY),'revenue'), revenue: sum(sales,'revenue'),
+      cost: sum(sales,'cost'), profit: sum(sales,'profit'),
+      wActive: active, wExpired: warranties.length-active, claimCounts };
+  },[products,warranties,claims,sales]);
+
+  const revenueByDay = useMemo(()=>{
+    const arr = [];
+    for (let i=13;i>=0;i--) {
+      const d = new Date(); d.setHours(0,0,0,0); d.setDate(d.getDate()-i);
+      arr.push({date:d, label:d.toLocaleDateString('th-TH',{day:'2-digit',month:'short'}), revenue:0, sales:0});
+    }
+    sales.forEach(s=>{
+      const dt = toDate(s.createdAt); if (!dt) return;
+      const found = arr.find(a=>a.date.toDateString()===dt.toDateString());
+      if (found) { found.revenue += s.revenue||0; found.sales += s.qty||0; }
+    });
+    return arr;
+  },[sales]);
+
+  const topProducts = useMemo(()=>{
+    const map = {};
+    sales.forEach(s=>{ map[s.productName] = (map[s.productName]||0)+(s.qty||0); });
+    return Object.entries(map).map(([name,qty])=>({name,qty})).sort((a,b)=>b.qty-a.qty).slice(0,5);
+  },[sales]);
+
+  if (loading) return <Spinner/>;
+
+  const Stat = ({label, value, icon, tone='slate'}) => {
+    const tones = {slate:'text-slate-900', green:'text-emerald-600', red:'text-rose-600', amber:'text-amber-600'};
+    return (
+      <div className="bg-white rounded-2xl border border-slate-200 p-4">
+        <div className="flex items-center justify-between">
+          <span className="text-xs text-slate-500">{label}</span>
+          {icon && <span>{icon}</span>}
+        </div>
+        <div className={`mt-2 text-lg sm:text-xl font-bold ${tones[tone]}`}>{value}</div>
+      </div>
+    );
+  };
+
+  const lineData = { labels: revenueByDay.map(x=>x.label),
+    datasets: [{label:'รายได้', data: revenueByDay.map(x=>x.revenue), borderColor:'#1f36eb',
+      backgroundColor:'rgba(31,54,235,0.08)', tension:0.35, fill:true, pointRadius:0}] };
+  const barData = { labels: revenueByDay.map(x=>x.label),
+    datasets: [{label:'จำนวนที่ขาย', data: revenueByDay.map(x=>x.sales), backgroundColor:'#1f36eb', borderRadius:6}] };
+  const topData = { labels: topProducts.map(x=>x.name),
+    datasets: [{label:'จำนวน', data: topProducts.map(x=>x.qty), backgroundColor:'#22c55e', borderRadius:6}] };
+  const warrantyData = { labels: ['อยู่ในประกัน','หมดประกัน'],
+    datasets: [{data:[stats.wActive, stats.wExpired], backgroundColor:['#22c55e','#ef4444']}] };
+  const claimData = { labels: CLAIM_STATUSES.map(s=>STATUS_LABELS[s]),
+    datasets: [{data: CLAIM_STATUSES.map(s=>stats.claimCounts[s]||0),
+      backgroundColor:['#f59e0b','#3b82f6','#22c55e','#ef4444','#a855f7','#94a3b8']}] };
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-2xl font-bold text-slate-900">Dashboard</h1>
+        <p className="text-sm text-slate-500">ภาพรวมระบบ</p>
+      </div>
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+        <Stat label="สินค้าทั้งหมด" value={fmtNum(products.length)} icon="🔋"/>
+        <Stat label="Stock คงเหลือ" value={fmtNum(stats.totalStock)} icon="📦"/>
+        <Stat label="สินค้าใกล้หมด" value={fmtNum(stats.lowStock)} icon="⚠️" tone="amber"/>
+        <Stat label="สินค้าหมด" value={fmtNum(stats.outStock)} icon="⛔" tone="red"/>
+      </div>
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+        <Stat label="ยอดขายวันนี้" value={fmtNum(stats.salesToday)} icon="🧾"/>
+        <Stat label="ยอดขายเดือนนี้" value={fmtNum(stats.salesMonth)} icon="📅"/>
+        <Stat label="Warranty ทั้งหมด" value={fmtNum(warranties.length)} icon="🛡️"/>
+        <Stat label="Claim ทั้งหมด" value={fmtNum(claims.length)} icon="🔧"/>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
+        <Stat label="รายได้วันนี้" value={fmtTHB(stats.revenueToday)} tone="green"/>
+        <Stat label="รายได้เดือนนี้" value={fmtTHB(stats.revenueMonth)} tone="green"/>
+        <Stat label="รายได้ทั้งหมด" value={fmtTHB(stats.revenue)} tone="green"/>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
+        <Card title="ต้นทุนรวม"><div className="text-xl font-bold">{fmtTHB(stats.cost)}</div></Card>
+        <Card title="กำไรโดยประมาณ"><div className="text-xl font-bold text-emerald-600">{fmtTHB(stats.profit)}</div></Card>
+        <Card title="Warranty Active / Expired">
+          <div className="flex gap-2 flex-wrap">
+            <Badge color="green">{stats.wActive} Active</Badge>
+            <Badge color="red">{stats.wExpired} Expired</Badge>
+          </div>
+        </Card>
+      </div>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <Card title="รายได้ 14 วันล่าสุด"><ChartBox type="line" data={lineData}/></Card>
+        <Card title="จำนวนสินค้าที่ขาย"><ChartBox type="bar" data={barData}/></Card>
+        <Card title="สินค้าขายดี (Top 5)">
+          {topProducts.length ? <ChartBox type="bar" data={topData} options={{indexAxis:'y'}}/> : <EmptyState/>}
+        </Card>
+        <Card title="Warranty Status"><ChartBox type="doughnut" data={warrantyData}/></Card>
+        <Card title="Claim Status" className="lg:col-span-2"><ChartBox type="doughnut" data={claimData}/></Card>
+      </div>
+    </div>
+  );
+}
+
+/* =============================================================
+   ADMIN: PRODUCTS
+   ============================================================= */
+function stockBadge(p) {
+  const s = p.stock||0; const th = p.threshold??5;
+  if (s<=0) return <Badge color="red">หมด</Badge>;
+  if (s<=th) return <Badge color="amber">ใกล้หมด</Badge>;
+  return <Badge color="green">มีสินค้า</Badge>;
+}
+
+function ProductsPage() {
+  const { user } = useAuth();
+  const toast = useToast();
+  const [items, setItems] = useState([]);
+  const [categories, setCategories] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState('');
+  const [filter, setFilter] = useState('all');
+  const [priceTarget, setPriceTarget] = useState(null);
+  const [newPrice, setNewPrice] = useState('');
+  const [stockTarget, setStockTarget] = useState(null);
+  const [stockQty, setStockQty] = useState('');
+  const [stockReason, setStockReason] = useState('รับสินค้าเข้า');
+  const [deleteTarget, setDeleteTarget] = useState(null);
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const [p, c] = await Promise.all([listProducts(), listCategories()]);
+      setItems(p); setCategories(c);
+    } catch { toast.error('โหลดข้อมูลไม่สำเร็จ'); }
+    finally { setLoading(false); }
+  };
+  useEffect(()=>{ load(); },[]);
+
+  const catName = (id) => categories.find(c=>c.id===id)?.name || id || '-';
+
+  const filtered = useMemo(()=>{
+    const q = search.trim().toLowerCase();
+    return items.filter(p=>{
+      if (filter==='active' && !p.active) return false;
+      if (filter==='inactive' && p.active) return false;
+      if (filter==='low' && !((p.stock||0)>0 && (p.stock||0)<=(p.threshold??5))) return false;
+      if (filter==='out' && (p.stock||0)>0) return false;
+      if (!q) return true;
+      return (p.name||'').toLowerCase().includes(q) || (p.sku||'').toLowerCase().includes(q) || (p.code||'').toLowerCase().includes(q);
+    });
+  },[items,search,filter]);
+
+  const submitPrice = async () => {
+    const val = Number(newPrice);
+    if (!Number.isFinite(val) || val<0) { toast.error('ราคาไม่ถูกต้อง'); return; }
+    try {
+      await changePrice(priceTarget.id, priceTarget, val, user);
+      toast.success('เปลี่ยนราคาสำเร็จ');
+      setPriceTarget(null); setNewPrice('');
+      await load();
+    } catch(e) { toast.error(e.message||'ไม่สำเร็จ'); }
+  };
+
+  const submitStock = async () => {
+    const delta = Number(stockQty);
+    if (!Number.isFinite(delta)||delta===0) { toast.error('จำนวนไม่ถูกต้อง'); return; }
+    try {
+      await adjustStock(stockTarget.id, delta, stockReason, user);
+      toast.success('ปรับ Stock สำเร็จ');
+      setStockTarget(null); setStockQty(''); setStockReason('รับสินค้าเข้า');
+      await load();
+    } catch(e) { toast.error(e.message||'ไม่สำเร็จ'); }
+  };
+
+  const confirmDelete = async () => {
+    try {
+      await softDeleteProduct(deleteTarget.id, deleteTarget, user);
+      toast.success('ปิดการใช้งานแล้ว');
+      setDeleteTarget(null);
+      await load();
+    } catch(e) { toast.error(e.message||'ไม่สำเร็จ'); }
+  };
+
+  return (
+    <div className="space-y-5">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold">สินค้า</h1>
+          <p className="text-sm text-slate-500">จัดการสินค้า ราคา และ Stock</p>
+        </div>
+        <a href="#/admin/products/new"><Button>+ เพิ่มสินค้า</Button></a>
+      </div>
+      <Card>
+        <div className="grid sm:grid-cols-3 gap-3 mb-4">
+          <div className="sm:col-span-2">
+            <Input placeholder="ค้นหาชื่อสินค้า, SKU, รหัส..." value={search} onChange={e=>setSearch(e.target.value)}/>
+          </div>
+          <Input as="select" value={filter} onChange={e=>setFilter(e.target.value)}>
+            <option value="all">ทั้งหมด</option>
+            <option value="active">ใช้งาน</option>
+            <option value="inactive">ปิดการใช้งาน</option>
+            <option value="low">ใกล้หมด</option>
+            <option value="out">หมด</option>
+          </Input>
+        </div>
+        {loading ? <Spinner/> : filtered.length===0 ? <EmptyState/> : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm responsive-table">
+              <thead className="text-left text-slate-500 border-b border-slate-200">
+                <tr>
+                  <th className="py-2">สินค้า</th><th className="py-2">SKU</th>
+                  <th className="py-2">หมวดหมู่</th>
+                  <th className="py-2">ราคา</th><th className="py-2">Stock</th>
+                  <th className="py-2">ประกัน</th><th className="py-2">สถานะ</th>
+                  <th className="py-2 text-right">จัดการ</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map(p=>(
+                  <tr key={p.id} className="border-b border-slate-100">
+                    <td data-label="สินค้า" className="py-3">
+                      <div className="flex items-center gap-3">
+                        <img src={p.images?.[0]?.url||'https://placehold.co/48x48?text=—'} alt="" className="w-10 h-10 rounded-lg object-cover bg-slate-100"/>
+                        <div className="min-w-0">
+                          <div className="font-medium text-slate-800 truncate">{p.name}</div>
+                          <div className="text-xs text-slate-500">{p.code||'-'}</div>
+                        </div>
+                      </div>
+                    </td>
+                    <td data-label="SKU" className="py-3 text-slate-600">{p.sku||'-'}</td>
+                    <td data-label="หมวดหมู่" className="py-3 text-slate-600 text-xs">{catName(p.categoryId)}</td>
+                    <td data-label="ราคา" className="py-3">{fmtTHB(p.price)}</td>
+                    <td data-label="Stock" className="py-3">{p.stock||0}</td>
+                    <td data-label="ประกัน" className="py-3">{p.warrantyMonths||0} ด.</td>
+                    <td data-label="สถานะ" className="py-3">
+                      <div className="flex gap-2 items-center flex-wrap">
+                        {p.active ? <Badge color="blue">ใช้งาน</Badge> : <Badge color="slate">ปิด</Badge>}
+                        {stockBadge(p)}
+                      </div>
+                    </td>
+                    <td data-label="จัดการ" className="py-3 text-right">
+                      <div className="inline-flex flex-wrap gap-1.5 justify-end">
+                        <a href={`#/admin/products/${p.id}`}><Button size="sm" variant="outline">แก้ไข</Button></a>
+                        <Button size="sm" variant="secondary" onClick={()=>{setPriceTarget(p);setNewPrice(String(p.price||0));}}>ราคา</Button>
+                        <Button size="sm" variant="secondary" onClick={()=>setStockTarget(p)}>Stock</Button>
+                        {p.active && <Button size="sm" variant="danger" onClick={()=>setDeleteTarget(p)}>ปิด</Button>}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+
+      <Modal open={!!priceTarget} onClose={()=>setPriceTarget(null)} title="เปลี่ยนราคา"
+        footer={<div className="flex justify-end gap-2">
+          <Button variant="secondary" onClick={()=>setPriceTarget(null)}>ยกเลิก</Button>
+          <Button onClick={submitPrice}>ยืนยัน</Button>
+        </div>}>
+        {priceTarget && (
+          <div className="space-y-3">
+            <div className="text-sm text-slate-600">สินค้า: <b>{priceTarget.name}</b></div>
+            <div className="text-sm">ราคาเดิม: <b>{fmtTHB(priceTarget.price)}</b></div>
+            <Input label="ราคาใหม่" type="number" min="0" value={newPrice} onChange={e=>setNewPrice(e.target.value)}/>
+          </div>
+        )}
+      </Modal>
+
+      <Modal open={!!stockTarget} onClose={()=>setStockTarget(null)} title="ปรับ Stock"
+        footer={<div className="flex justify-end gap-2">
+          <Button variant="secondary" onClick={()=>setStockTarget(null)}>ยกเลิก</Button>
+          <Button onClick={submitStock}>บันทึก</Button>
+        </div>}>
+        {stockTarget && (
+          <div className="space-y-3">
+            <div className="text-sm text-slate-600">Stock ปัจจุบัน: <b>{stockTarget.stock||0}</b></div>
+            <Input label="จำนวน (ใส่ + หรือ -)" type="number" value={stockQty} onChange={e=>setStockQty(e.target.value)} placeholder="+10 หรือ -5"/>
+            <Input as="select" label="เหตุผล" value={stockReason} onChange={e=>setStockReason(e.target.value)}>
+              <option>รับสินค้าเข้า</option><option>ขายสินค้า</option><option>คืนสินค้า</option>
+              <option>สินค้าชำรุด</option><option>ปรับ Stock</option><option>อื่น ๆ</option>
+            </Input>
+          </div>
+        )}
+      </Modal>
+
+      <Confirm open={!!deleteTarget} onClose={()=>setDeleteTarget(null)} onConfirm={confirmDelete}
+        title="ปิดการใช้งานสินค้า" danger
+        message={`คุณต้องการปิดการใช้งาน "${deleteTarget?.name}" ใช่หรือไม่?`}
+        confirmText="ปิดการใช้งาน"/>
+    </div>
+  );
+}
+
+/* ---------- PRODUCT FORM ---------- */
+function ProductFormPage({id}) {
+  const { user } = useAuth();
+  const toast = useToast();
+  const isEdit = !!id;
+  const empty = {name:'',code:'',sku:'',categoryId:'',description:'',cost:0,price:0,salePrice:0,stock:0,threshold:5,warrantyMonths:12,active:true,images:[]};
+  const [form, setForm] = useState(empty);
+  const [categories, setCategories] = useState([]);
+  const [loading, setLoading] = useState(isEdit);
+  const [saving, setSaving] = useState(false);
+  const [errors, setErrors] = useState({});
+
+  useEffect(()=>{
+    (async()=>{
+      try {
+        const cats = await listCategories();
+        setCategories(cats);
+        if (isEdit) {
+          const p = await getProduct(id);
+          if (!p) { toast.error('ไม่พบสินค้า'); window.location.hash='#/admin/products'; return; }
+          setForm({...empty, ...p});
+        }
+      } catch { toast.error('โหลดไม่สำเร็จ'); }
+      finally { setLoading(false); }
+    })();
+  },[id]);
+
+  const setField = (k,v) => setForm(f=>({...f,[k]:v}));
+
+  const validate = () => {
+    const e = {};
+    if (!form.name?.trim()) e.name = 'กรุณากรอกชื่อสินค้า';
+    if (Number(form.cost)<0) e.cost = 'ราคาทุนต้องไม่ติดลบ';
+    if (Number(form.price)<0) e.price = 'ราคาขายต้องไม่ติดลบ';
+    if (Number(form.stock)<0) e.stock = 'Stock ต้องไม่ติดลบ';
+    setErrors(e);
+    return !Object.keys(e).length;
+  };
+
+  const submit = async (ev) => {
+    ev.preventDefault();
+    if (!validate()) return;
+    setSaving(true);
+    try {
+      const payload = {
+        name: form.name.trim(), code: form.code||'', sku: form.sku||'',
+        categoryId: form.categoryId||'', category: form.categoryId||'',
+        description: form.description||'',
+        cost: Number(form.cost)||0, price: Number(form.price)||0,
+        salePrice: Number(form.salePrice)||0, stock: Number(form.stock)||0,
+        threshold: Number(form.threshold)||0,
+        warrantyMonths: Number(form.warrantyMonths)||12,
+        active: !!form.active, images: form.images||[]
+      };
+      if (isEdit) { await updateProduct(id, form, payload, user); toast.success('บันทึกสำเร็จ'); }
+      else { await createProduct(payload, user); toast.success('เพิ่มสินค้าสำเร็จ'); }
+      window.location.hash = '#/admin/products';
+    } catch(e) { toast.error(e.message||'บันทึกไม่สำเร็จ'); }
+    finally { setSaving(false); }
+  };
+
+  if (loading) return <Spinner/>;
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-bold">{isEdit?'แก้ไขสินค้า':'เพิ่มสินค้า'}</h1>
+        <a href="#/admin/products"><Button variant="outline">← กลับ</Button></a>
+      </div>
+      <form onSubmit={submit} className="grid lg:grid-cols-3 gap-5">
+        <div className="lg:col-span-2 space-y-5">
+          <Card title="ข้อมูลสินค้า">
+            <div className="grid sm:grid-cols-2 gap-4">
+              <Input label="ชื่อสินค้า *" value={form.name} onChange={e=>setField('name',e.target.value)} error={errors.name}/>
+              <Input label="รหัสสินค้า" value={form.code} onChange={e=>setField('code',e.target.value)}/>
+              <Input label="SKU" value={form.sku} onChange={e=>setField('sku',e.target.value)}/>
+              <Input as="select" label="หมวดหมู่" value={form.categoryId||''} onChange={e=>setField('categoryId',e.target.value)}>
+                <option value="">-- ไม่ระบุ --</option>
+                {categories.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}
+              </Input>
+              <div className="sm:col-span-2">
+                <Input as="textarea" rows={3} label="รายละเอียด" value={form.description} onChange={e=>setField('description',e.target.value)}/>
+              </div>
+            </div>
+          </Card>
+          <Card title="ราคา">
+            <div className="grid sm:grid-cols-3 gap-4">
+              <Input label="ราคาทุน" type="number" min="0" value={form.cost} onChange={e=>setField('cost',e.target.value)} error={errors.cost}/>
+              <Input label="ราคาขาย" type="number" min="0" value={form.price} onChange={e=>setField('price',e.target.value)} error={errors.price}/>
+              <Input label="ราคาพิเศษ" type="number" min="0" value={form.salePrice} onChange={e=>setField('salePrice',e.target.value)}/>
+            </div>
+          </Card>
+          <Card title="Stock & ประกัน">
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1.5">จำนวน Stock *</label>
+                <div className="flex gap-2 items-stretch">
+                  <button type="button"
+                    onClick={()=>setField('stock', Math.max(0, (Number(form.stock)||0)-1))}
+                    className="w-12 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 active:bg-slate-100 font-bold text-xl text-slate-600 transition">
+                    −
+                  </button>
+                  <input type="number" min="0" value={form.stock}
+                    onChange={e=>setField('stock',e.target.value)}
+                    className={`flex-1 rounded-lg border px-3.5 py-2.5 text-sm outline-none text-center font-semibold
+                      ${errors.stock ? 'border-rose-400' : 'border-slate-300 focus:border-brand-500 focus:ring-2 focus:ring-brand-100'}`}/>
+                  <button type="button"
+                    onClick={()=>setField('stock', (Number(form.stock)||0)+1)}
+                    className="w-12 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 active:bg-slate-100 font-bold text-xl text-slate-600 transition">
+                    +
+                  </button>
+                </div>
+                <div className="flex gap-1.5 mt-2 flex-wrap">
+                  {[-10,-5,+5,+10,+50].map(delta => (
+                    <button key={delta} type="button"
+                      onClick={()=>setField('stock', Math.max(0, (Number(form.stock)||0)+delta))}
+                      className={`px-3 py-1 rounded-lg text-xs font-medium border transition
+                        ${delta > 0
+                          ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                          : 'border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100'}`}>
+                      {delta > 0 ? `+${delta}` : delta}
+                    </button>
+                  ))}
+                  <button type="button"
+                    onClick={()=>setField('stock', 0)}
+                    className="px-3 py-1 rounded-lg text-xs font-medium border border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100">
+                    Reset
+                  </button>
+                </div>
+                {errors.stock && <span className="block mt-1 text-xs text-rose-600">{errors.stock}</span>}
+              </div>
+              <div className="grid sm:grid-cols-2 gap-4">
+                <Input label="Threshold แจ้งเตือน" type="number" min="0" value={form.threshold} onChange={e=>setField('threshold',e.target.value)}/>
+                <Input label="ประกัน (เดือน)" type="number" min="0" value={form.warrantyMonths} onChange={e=>setField('warrantyMonths',e.target.value)}/>
+              </div>
+            </div>
+          </Card>
+          <Card title="รูปสินค้า">
+            <ImageUploader images={form.images||[]} onChange={imgs=>setField('images',imgs)} productId={id||'temp'}/>
+          </Card>
+        </div>
+        <div className="space-y-5">
+          <Card title="สถานะ">
+            <label className="flex items-center gap-2">
+              <input type="checkbox" checked={form.active} onChange={e=>setField('active',e.target.checked)}/>
+              <span>เปิดใช้งานสินค้า (แสดงบนหน้าแรก)</span>
+            </label>
+          </Card>
+          <Card>
+            <Button type="submit" size="lg" className="w-full" disabled={saving}>
+              {saving?'กำลังบันทึก...':'บันทึก'}
+            </Button>
+          </Card>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+/* =============================================================
+   ADMIN: WARRANTIES
+   ============================================================= */
+function WarrantiesPage() {
+  const { user } = useAuth();
+  const toast = useToast();
+  const [items, setItems] = useState([]);
+  const [products, setProducts] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState('');
+  const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const todayStr = () => toDateInput(new Date());
+  const [form, setForm] = useState({serialNumber:'',productId:'',productName:'',purchaseDate:todayStr(),startDate:todayStr(),months:12,customerName:''});
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const load = async () => {
+    setLoading(true);
+    try {
+      const [w,p] = await Promise.all([listWarranties(), listProducts()]);
+      setItems(w); setProducts(p);
+    } catch (err) {
+      console.error('[Warranties] load error:', err);
+      toast.error('โหลดไม่สำเร็จ: ' + (err.message || err.code || 'unknown'));
+    }
+    finally { setLoading(false); }
+  };
+  useEffect(()=>{ load(); },[]);
+
+  const filtered = useMemo(()=>{
+    const q = search.trim().toLowerCase();
+    if (!q) return items;
+    return items.filter(w =>
+      (w.serialNumber||'').toLowerCase().includes(q)
+      || (w.productName||'').toLowerCase().includes(q)
+      || (w.customerName||'').toLowerCase().includes(q));
+  },[items,search]);
+
+  const submit = async () => {
+    if (!form.serialNumber.trim()) { toast.error('กรุณากรอก Serial Number'); return; }
+    if (!form.productId) { toast.error('กรุณาเลือกสินค้า'); return; }
+    setSaving(true);
+    try {
+      const selected = products.find(p=>p.id===form.productId);
+      await createWarranty({
+        serialNumber: form.serialNumber.trim().toUpperCase(),
+        productId: form.productId, productName: selected?.name||'',
+        purchaseDate: form.purchaseDate, startDate: form.startDate,
+        months: Number(form.months)||12, customerName: form.customerName||''
+      }, user);
+      toast.success('เพิ่ม Warranty สำเร็จ');
+      setOpen(false);
+      setForm({serialNumber:'',productId:'',productName:'',purchaseDate:todayStr(),startDate:todayStr(),months:12,customerName:''});
+      await load();
+    } catch(e) { toast.error(e.message||'ไม่สำเร็จ'); }
+    finally { setSaving(false); }
+  };
+  const confirmDelete = async () => {
+    try {
+      await deleteWarranty(deleteTarget.id, deleteTarget, user);
+      toast.success('ลบ Warranty สำเร็จ');
+      setDeleteTarget(null);
+      await load();
+    } catch(e) {
+      toast.error(e.message||'ลบไม่สำเร็จ');
+    }
+  };
+
+  const exportCSV = () => {
+    downloadCSV('warranties.csv', filtered.map(w=>({
+      Serial: w.serialNumber, Product: w.productName,
+      Start: fmtDate(w.startDate), End: fmtDate(w.endDate),
+      Months: w.months, Status: warrantyStatus(w.endDate).status,
+      Customer: w.customerName||''
+    })));
+  };
+
+  return (
+    <div className="space-y-5">
+      <div className="flex flex-col sm:flex-row justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold">Warranty</h1>
+          <p className="text-sm text-slate-500">จัดการการรับประกัน</p>
+        </div>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={exportCSV}>Export CSV</Button>
+          <Button onClick={()=>setOpen(true)}>+ เพิ่ม Warranty</Button>
+        </div>
+      </div>
+      <Card>
+        <Input placeholder="ค้นหา Serial / สินค้า / ลูกค้า..." value={search} onChange={e=>setSearch(e.target.value)}/>
+        <div className="mt-4">
+          {loading ? <Spinner/> : filtered.length===0 ? <EmptyState/> : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm responsive-table">
+                <thead className="text-left text-slate-500 border-b border-slate-200">
+                  <tr>
+                    <th className="py-2">Serial</th><th className="py-2">สินค้า</th>
+                    <th className="py-2">เริ่ม</th><th className="py-2">หมด</th>
+                    <th className="py-2">สถานะ</th>
+                    <th className="py-2 text-right">จัดการ</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filtered.map(w=>{
+                    const s = warrantyStatus(w.endDate);
+                    return (
+                      <tr key={w.id} className="border-b border-slate-100">
+                        <td data-label="Serial" className="py-3 font-mono text-xs">{w.serialNumber}</td>
+                        <td data-label="สินค้า" className="py-3">{w.productName}</td>
+                        <td data-label="เริ่ม" className="py-3">{fmtDate(w.startDate)}</td>
+                        <td data-label="หมด" className="py-3">{fmtDate(w.endDate)}</td>
+                        <td data-label="สถานะ" className="py-3">
+                          {s.status==='ACTIVE'
+                            ? <Badge color="green">อยู่ในประกัน · {s.daysLeft} วัน</Badge>
+                            : <Badge color="red">หมดประกัน</Badge>}
+                        </td>
+                        <td data-label="จัดการ" className="py-3 text-right">
+                          <Button size="sm" variant="danger" onClick={()=>setDeleteTarget(w)}>
+                            ลบ
+                          </Button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </Card>
+
+      <Modal open={open} onClose={()=>setOpen(false)} title="เพิ่ม Warranty" size="lg"
+        footer={<div className="flex justify-end gap-2">
+          <Button variant="secondary" onClick={()=>setOpen(false)}>ยกเลิก</Button>
+          <Button onClick={submit} disabled={saving}>{saving?'กำลังบันทึก...':'บันทึก'}</Button>
+        </div>}>
+        <div className="grid sm:grid-cols-2 gap-4">
+          <Input label="Serial Number *" value={form.serialNumber} onChange={e=>setForm(f=>({...f,serialNumber:e.target.value.toUpperCase()}))}/>
+          <Input as="select" label="สินค้า *" value={form.productId}
+            onChange={e=>{
+              const p = products.find(x=>x.id===e.target.value);
+              setForm(f=>({...f,productId:e.target.value,productName:p?.name||'',months:p?.warrantyMonths||f.months}));
+            }}>
+            <option value="">-- เลือกสินค้า --</option>
+            {products.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
+          </Input>
+        </div>
+        {products.length === 0 && (
+          <div className="rounded-xl bg-amber-50 border border-amber-200 p-3 text-sm text-amber-800">
+            ⚠️ ยังไม่มีสินค้าในระบบ — ไปที่เมนู <a href="#/admin/products/new" className="font-semibold underline">+ เพิ่มสินค้า</a> ก่อน
+          </div>
+        )}
+        <div className="grid sm:grid-cols-2 gap-4">
+          <Input label="วันที่ซื้อ" type="date" value={form.purchaseDate} onChange={e=>setForm(f=>({...f,purchaseDate:e.target.value}))}/>
+          <Input label="วันที่เริ่มประกัน" type="date" value={form.startDate} onChange={e=>setForm(f=>({...f,startDate:e.target.value}))}/>
+          <Input label="ระยะเวลา (เดือน)" type="number" min="1" value={form.months} onChange={e=>setForm(f=>({...f,months:e.target.value}))}/>
+          <Input label="ชื่อลูกค้า" value={form.customerName} onChange={e=>setForm(f=>({...f,customerName:e.target.value}))}/>
+        </div>
+      </Modal>
+
+      <Confirm
+        open={!!deleteTarget}
+        onClose={()=>setDeleteTarget(null)}
+        onConfirm={confirmDelete}
+        title="ลบ Warranty"
+        danger
+        message={`คุณต้องการลบ Warranty นี้ใช่หรือไม่?\n\nSerial: ${deleteTarget?.serialNumber || ''}\nสินค้า: ${deleteTarget?.productName || ''}\n\n⚠️ ข้อมูลจะถูกลบถาวร และไม่สามารถกู้คืนได้`}
+        confirmText="ลบถาวร"
+      />
+    </div>
+  );
+}
+
+/* =============================================================
+   ADMIN: CLAIMS
+    ============================================================= */
+function ClaimsPage() {
+  const { user } = useAuth();
+  const toast = useToast();
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState('');
+  const [filter, setFilter] = useState('all');
+  const [editing, setEditing] = useState(null);
+  const [newStatus, setNewStatus] = useState('');
+  const [note, setNote] = useState('');
+
+  const load = async () => {
+    setLoading(true);
+    try { setItems(await listClaims()); }
+    catch { toast.error('โหลดไม่สำเร็จ'); }
+    finally { setLoading(false); }
+  };
+  useEffect(()=>{ load(); },[]);
+
+  const filtered = useMemo(()=>{
+    const q = search.trim().toLowerCase();
+    return items.filter(c=>{
+      if (filter!=='all' && c.status!==filter) return false;
+      if (!q) return true;
+      return (c.serialNumber||'').toLowerCase().includes(q)
+        || (c.productName||'').toLowerCase().includes(q);
+    });
+  },[items,search,filter]);
+
+  const submit = async () => {
+    try {
+      await updateClaimStatus(editing.id, newStatus, user, {note});
+      toast.success('อัปเดตสถานะสำเร็จ');
+      setEditing(null); setNote('');
+      await load();
+    } catch(e) { toast.error(e.message||'ไม่สำเร็จ'); }
+  };
+
+  const statusColor = {PENDING:'amber', INSPECTING:'blue', APPROVED:'green', REJECTED:'red', REPLACED:'purple', COMPLETED:'slate'};
+
+  return (
+    <div className="space-y-5">
+      <div>
+        <h1 className="text-2xl font-bold">Claim</h1>
+        <p className="text-sm text-slate-500">จัดการรายการเคลม</p>
+      </div>
+      <Card>
+        <div className="grid sm:grid-cols-3 gap-3">
+          <div className="sm:col-span-2">
+            <Input placeholder="ค้นหา Serial / สินค้า..." value={search} onChange={e=>setSearch(e.target.value)}/>
+          </div>
+          <Input as="select" value={filter} onChange={e=>setFilter(e.target.value)}>
+            <option value="all">ทุกสถานะ</option>
+            {CLAIM_STATUSES.map(s=><option key={s} value={s}>{STATUS_LABELS[s]}</option>)}
+          </Input>
+        </div>
+        <div className="mt-4">
+          {loading ? <Spinner/> : filtered.length===0 ? <EmptyState/> : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm responsive-table">
+                <thead className="text-left text-slate-500 border-b border-slate-200">
+                  <tr>
+                    <th className="py-2">Claim ID</th><th className="py-2">Serial</th>
+                    <th className="py-2">สินค้า</th><th className="py-2">อาการ</th>
+                    <th className="py-2">วันที่แจ้ง</th><th className="py-2">สถานะ</th>
+                    <th className="py-2 text-right">จัดการ</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filtered.map(c=>(
+                    <tr key={c.id} className="border-b border-slate-100">
+                      <td data-label="Claim ID" className="py-3 font-mono text-xs">{c.id.slice(0,8)}</td>
+                      <td data-label="Serial" className="py-3 font-mono text-xs">{c.serialNumber}</td>
+                      <td data-label="สินค้า" className="py-3">{c.productName}</td>
+                      <td data-label="อาการ" className="py-3 max-w-[200px] truncate">{c.issue}</td>
+                      <td data-label="วันที่แจ้ง" className="py-3">{fmtDateTime(c.createdAt)}</td>
+                      <td data-label="สถานะ" className="py-3">
+                        <Badge color={statusColor[c.status]}>{STATUS_LABELS[c.status]||c.status}</Badge>
+                      </td>
+                      <td data-label="จัดการ" className="py-3 text-right">
+                        <Button size="sm" variant="outline" onClick={()=>{setEditing(c);setNewStatus(c.status);setNote(c.note||'');}}>
+                          อัปเดต
+                        </Button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </Card>
+
+      <Modal open={!!editing} onClose={()=>setEditing(null)} title="อัปเดตสถานะ Claim"
+        footer={<div className="flex justify-end gap-2">
+          <Button variant="secondary" onClick={()=>setEditing(null)}>ยกเลิก</Button>
+          <Button onClick={submit}>บันทึก</Button>
+        </div>}>
+        {editing && (
+          <div className="space-y-3">
+            <div className="text-sm text-slate-600">Serial: <b>{editing.serialNumber}</b></div>
+            <Input as="select" label="สถานะ" value={newStatus} onChange={e=>setNewStatus(e.target.value)}>
+              {CLAIM_STATUSES.map(s=><option key={s} value={s}>{STATUS_LABELS[s]}</option>)}
+            </Input>
+            <Input as="textarea" label="หมายเหตุ" rows={3} value={note} onChange={e=>setNote(e.target.value)}/>
+          </div>
+        )}
+      </Modal>
+    </div>
+  );
+}
+
+/* =============================================================
+   ADMIN: REVENUE
+   ============================================================= */
+function RevenuePage() {
+  const [sales, setSales] = useState([]);
+  const [loading, setLoading] = useState(true);
+  useEffect(()=>{(async()=>{
+    try { setSales(await listSales()); }
+    finally { setLoading(false); }
+  })();},[]);
+
+  const stats = useMemo(()=>{
+    const now = new Date();
+    const sD = new Date(now.getFullYear(),now.getMonth(),now.getDate());
+    const sM = new Date(now.getFullYear(),now.getMonth(),1);
+    const sY = new Date(now.getFullYear(),0,1);
+    const at = s => toDate(s.createdAt)||new Date(0);
+    const f = d => sales.filter(s=>at(s)>=d);
+    const sum = (arr,k)=>arr.reduce((a,x)=>a+(x[k]||0),0);
+    return { today: sum(f(sD),'revenue'), month: sum(f(sM),'revenue'),
+      year: sum(f(sY),'revenue'), total: sum(sales,'revenue'),
+      cost: sum(sales,'cost'), profit: sum(sales,'profit'), salesCount: sales.length };
+  },[sales]);
+
+  if (loading) return <Spinner/>;
+
+  const exportCSV = () => downloadCSV('revenue.csv', sales.map(s=>({
+    Date: fmtDateTime(s.createdAt), Product: s.productName, Qty: s.qty,
+    UnitPrice: s.unitPrice, Revenue: s.revenue, Cost: s.cost, Profit: s.profit
+  })));
+
+  const Box = ({label, value, tone}) => (
+    <div className="bg-white rounded-2xl border border-slate-200 p-4">
+      <div className="text-xs text-slate-500">{label}</div>
+      <div className={`mt-2 text-lg sm:text-xl font-bold ${tone==='green'?'text-emerald-600':'text-slate-900'}`}>{value}</div>
+    </div>
+  );
+
+  return (
+    <div className="space-y-5">
+      <div className="flex justify-between items-center gap-3 flex-wrap">
+        <div>
+          <h1 className="text-2xl font-bold">รายได้</h1>
+          <p className="text-sm text-slate-500">ภาพรวมรายได้และกำไร</p>
+        </div>
+        <Button variant="outline" onClick={exportCSV}>Export CSV</Button>
+      </div>
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+        <Box label="รายได้วันนี้" value={fmtTHB(stats.today)}/>
+        <Box label="รายได้เดือนนี้" value={fmtTHB(stats.month)}/>
+        <Box label="รายได้ปีนี้" value={fmtTHB(stats.year)}/>
+        <Box label="รายได้ทั้งหมด" value={fmtTHB(stats.total)}/>
+      </div>
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+        <Box label="ยอดขายรวม" value={fmtNum(stats.salesCount)}/>
+        <Box label="ต้นทุนรวม" value={fmtTHB(stats.cost)}/>
+        <Box label="กำไรโดยประมาณ" value={fmtTHB(stats.profit)} tone="green"/>
+        <Box label="อัตรากำไร" value={`${stats.total?((stats.profit/stats.total)*100).toFixed(1):0}%`}/>
+      </div>
+      <Card title="รายการขายล่าสุด">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm responsive-table">
+            <thead className="text-left text-slate-500 border-b border-slate-200">
+              <tr>
+                <th className="py-2">วันที่</th><th className="py-2">สินค้า</th>
+                <th className="py-2">จำนวน</th><th className="py-2">ราคา/หน่วย</th>
+                <th className="py-2">รายได้</th><th className="py-2">กำไร</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sales.slice(0,50).map(s=>(
+                <tr key={s.id} className="border-b border-slate-100">
+                  <td data-label="วันที่" className="py-2">{fmtDateTime(s.createdAt)}</td>
+                  <td data-label="สินค้า" className="py-2">{s.productName}</td>
+                  <td data-label="จำนวน" className="py-2">{s.qty}</td>
+                  <td data-label="ราคา/หน่วย" className="py-2">{fmtTHB(s.unitPrice)}</td>
+                  <td data-label="รายได้" className="py-2">{fmtTHB(s.revenue)}</td>
+                  <td data-label="กำไร" className="py-2 text-emerald-600">{fmtTHB(s.profit)}</td>
+                </tr>
+              ))}
+              {!sales.length && <tr><td colSpan={6}><EmptyState/></td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+/* =============================================================
+   ADMIN: REPORTS
+   ============================================================= */
+function ReportsPage() {
+  const [loading, setLoading] = useState(true);
+  const [products, setProducts] = useState([]);
+  const [warranties, setWarranties] = useState([]);
+  const [claims, setClaims] = useState([]);
+  const [sales, setSales] = useState([]);
+  const [from, setFrom] = useState(()=>{const d=new Date();d.setDate(1);return toDateInput(d);});
+  const [to, setTo] = useState(toDateInput(new Date()));
+
+  useEffect(()=>{(async()=>{
+    try {
+      const safe = (p) => p.catch(() => []);
+      const [p,w,c,s] = await Promise.all([
+        safe(listProducts()), safe(listWarranties()), safe(listClaims()), safe(listSales())
+      ]);
+      setProducts(p); setWarranties(w); setClaims(c); setSales(s);
+    } finally { setLoading(false); }
+  })();},[]);
+
+  const salesFiltered = useMemo(()=>{
+    const f = new Date(from); f.setHours(0,0,0,0);
+    const t = new Date(to); t.setHours(23,59,59,999);
+    return sales.filter(s=>{
+      const at = toDate(s.createdAt);
+      return at && at>=f && at<=t;
+    });
+  },[sales,from,to]);
+
+  if (loading) return <Spinner/>;
+
+  const ReportCard = ({title, subtitle, onExport}) => (
+    <div className="bg-white rounded-2xl border border-slate-200 p-5">
+      <div className="font-semibold text-slate-800">{title}</div>
+      <div className="text-sm text-slate-500 mt-1">{subtitle}</div>
+      <Button variant="outline" size="sm" className="mt-4 w-full" onClick={onExport}>Export CSV</Button>
+    </div>
+  );
+
+  const Box = ({label, value, tone}) => (
+    <div className="bg-slate-50 rounded-xl p-4">
+      <div className="text-xs text-slate-500">{label}</div>
+      <div className={`mt-1 text-lg font-bold ${tone==='green'?'text-emerald-600':''}`}>{value}</div>
+    </div>
+  );
+
+  return (
+    <div className="space-y-5">
+      <div>
+        <h1 className="text-2xl font-bold">รายงาน</h1>
+        <p className="text-sm text-slate-500">รายงานยอดขาย รายได้ Stock Warranty Claim</p>
+      </div>
+
+      <Card title="ช่วงเวลา">
+        <div className="grid sm:grid-cols-3 gap-3">
+          <Input label="จาก" type="date" value={from} onChange={e=>setFrom(e.target.value)}/>
+          <Input label="ถึง" type="date" value={to} onChange={e=>setTo(e.target.value)}/>
+        </div>
+      </Card>
+
+      <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <ReportCard title="รายงานยอดขาย" subtitle={`${salesFiltered.length} รายการ`}
+          onExport={()=>downloadCSV('report-sales.csv', salesFiltered.map(s=>({
+            Date:fmtDate(s.createdAt), Product:s.productName, Qty:s.qty,
+            Revenue:s.revenue, Cost:s.cost, Profit:s.profit
+          })))}/>
+        <ReportCard title="รายงาน Stock" subtitle={`${products.length} SKU`}
+          onExport={()=>downloadCSV('report-stock.csv', products.map(p=>({
+            Name:p.name, SKU:p.sku, Stock:p.stock, Threshold:p.threshold,
+            Status:p.active?'active':'inactive'
+          })))}/>
+        <ReportCard title="รายงาน Warranty" subtitle={`${warranties.length} รายการ`}
+          onExport={()=>downloadCSV('report-warranty.csv', warranties.map(w=>({
+            Serial:w.serialNumber, Product:w.productName,
+            Start:fmtDate(w.startDate), End:fmtDate(w.endDate),
+            Status:warrantyStatus(w.endDate).status
+          })))}/>
+        <ReportCard title="รายงาน Claim" subtitle={`${claims.length} รายการ`}
+          onExport={()=>downloadCSV('report-claims.csv', claims.map(c=>({
+            ClaimId:c.id, Serial:c.serialNumber, Product:c.productName,
+            Issue:c.issue, Status:c.status, Date:fmtDate(c.createdAt)
+          })))}/>
+      </div>
+
+      <Card title="สรุปช่วงที่เลือก">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          <Box label="ยอดขาย" value={fmtNum(salesFiltered.length)}/>
+          <Box label="รายได้" value={fmtTHB(salesFiltered.reduce((s,x)=>s+(x.revenue||0),0))}/>
+          <Box label="ต้นทุน" value={fmtTHB(salesFiltered.reduce((s,x)=>s+(x.cost||0),0))}/>
+          <Box label="กำไร" value={fmtTHB(salesFiltered.reduce((s,x)=>s+(x.profit||0),0))} tone="green"/>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+/* =============================================================
+   ADMIN: AUDIT LOG
+   ============================================================= */
+function AuditPage() {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState('');
+
+  useEffect(()=>{(async()=>{
+    try { setItems(await listAuditLogs(300)); }
+    finally { setLoading(false); }
+  })();},[]);
+
+  const filtered = useMemo(()=>{
+    const q = search.trim().toLowerCase();
+    if (!q) return items;
+    return items.filter(a =>
+      (a.action||'').toLowerCase().includes(q)
+      || (a.adminEmail||'').toLowerCase().includes(q)
+      || JSON.stringify(a.details||{}).toLowerCase().includes(q));
+  },[items,search]);
+
+  return (
+    <div className="space-y-5">
+      <div>
+        <h1 className="text-2xl font-bold">Audit Log</h1>
+        <p className="text-sm text-slate-500">ประวัติการทำงานของ Admin</p>
+      </div>
+      <Card>
+        <Input placeholder="ค้นหา action / admin / รายละเอียด..." value={search} onChange={e=>setSearch(e.target.value)}/>
+        <div className="mt-4">
+          {loading ? <Spinner/> : filtered.length===0 ? <EmptyState/> : (
+            <div className="space-y-3">
+              {filtered.map(a=>(
+                <div key={a.id} className="rounded-xl border border-slate-200 p-4">
+                  <div className="flex flex-wrap items-center gap-2 justify-between">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-semibold text-slate-800">{a.action}</span>
+                      <span className="text-xs text-slate-500">{a.adminEmail||'-'}</span>
+                    </div>
+                    <span className="text-xs text-slate-400">{fmtDateTime(a.at)}</span>
+                  </div>
+                  <pre className="mt-2 text-xs bg-slate-50 rounded-lg p-3 overflow-x-auto text-slate-600">
+                    {JSON.stringify(a.details||{}, null, 2)}
+                  </pre>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+/* =============================================================
+   HASH ROUTER
+   ============================================================= */
+function useHash() {
+  const [hash, setHash] = useState(window.location.hash || '#/');
+  useEffect(()=>{
+    const h = () => setHash(window.location.hash || '#/');
+    window.addEventListener('hashchange', h);
+    return ()=>window.removeEventListener('hashchange', h);
+  },[]);
+  return hash;
+}
+
+/* =============================================================
+   APP
+   ============================================================= */
+function App() {
+  const hash = useHash();
+  const { user, isAdmin, loading } = useAuth();
+
+  useEffect(() => {
+    if (loading) return;
+    if (user && isAdmin && hash === '#/admin/login') {
+      window.location.hash = '#/admin/dashboard';
+    }
+  }, [loading, user, isAdmin, hash]);
+
+  if (loading) {
+    return <div className="min-h-screen grid place-items-center"><Spinner label="กำลังตรวจสอบสิทธิ์..."/></div>;
+  }
+
+  if (hash === '' || hash === '#/' || hash === '#') return <PublicLayout><HomePage/></PublicLayout>;
+  if (hash === '#/check') return <PublicLayout><CheckWarrantyPage/></PublicLayout>;
+if (hash === '#/products') return <PublicLayout><ProductsPublicPage/></PublicLayout>;
+if (hash === '#/contact') return <PublicLayout><ContactPublicPage/></PublicLayout>;
+  if (hash === '#/admin/login') return <LoginPage/>;
+
+  if (hash.startsWith('#/admin')) {
+    if (!user) {
+      setTimeout(()=>{ window.location.hash = '#/admin/login'; }, 0);
+      return <div className="min-h-screen grid place-items-center"><Spinner label="กำลังพาไปหน้า Login..."/></div>;
+    }
+    if (!isAdmin) {
+      return (
+        <div className="min-h-screen grid place-items-center p-6">
+          <div className="max-w-md text-center bg-white rounded-2xl border border-slate-200 p-8">
+            <div className="text-4xl mb-3">⛔</div>
+            <h2 className="text-lg font-semibold text-slate-800">ไม่มีสิทธิ์เข้าถึง</h2>
+            <p className="text-sm text-slate-500 mt-1">บัญชีนี้ไม่ได้เป็นผู้ดูแลระบบ</p>
+            <div className="mt-4"><a href="#/admin/login"><Button variant="outline">กลับหน้า Login</Button></a></div>
+          </div>
+        </div>
+      );
+    }
+
+    let page = null;
+    if (hash === '#/admin' || hash === '#/admin/dashboard') page = <DashboardPage/>;
+    else if (hash === '#/admin/products') page = <ProductsPage/>;
+    else if (hash === '#/admin/products/new') page = <ProductFormPage/>;
+    else if (hash.startsWith('#/admin/products/')) page = <ProductFormPage id={hash.replace('#/admin/products/','')}/>;
+    else if (hash === '#/admin/categories') page = <CategoriesPage/>;
+    else if (hash === '#/admin/contacts') page = <ContactsPage/>;
+    else if (hash === '#/admin/warranties') page = <WarrantiesPage/>;
+    else if (hash === '#/admin/claims') page = <ClaimsPage/>;
+    else if (hash === '#/admin/revenue') page = <RevenuePage/>;
+    else if (hash === '#/admin/reports') page = <ReportsPage/>;
+    else if (hash === '#/admin/audit') page = <AuditPage/>;
+    else page = <div className="p-8 text-center"><EmptyState title="ไม่พบหน้านี้" icon="🚫"/></div>;
+
+    let current = hash;
+    if (hash.startsWith('#/admin/products/')) current = '#/admin/products';
+
+    return <AdminLayout current={current}>{page}</AdminLayout>;
+  }
+
+  return <PublicLayout><HomePage/></PublicLayout>;
+}
+
+/* =============================================================
+   MOUNT
+   ============================================================= */
+ReactDOM.createRoot(document.getElementById('root')).render(
+  <AuthProvider><ToastProvider><App/></ToastProvider></AuthProvider>
+);
+</script>
+</body>
+</html>
